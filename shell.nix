@@ -46,7 +46,7 @@ pkgs.mkShell {
     echo "  rustc   $(rustc --version)"
     echo "  clang   $(clang --version | head -1)"
     echo "  cmake   $(cmake --version | head -1)"
-    echo "  sccache $(sccache --version) → cache at $SCCACHE_DIR''${SCCACHE_DIR:-~/.cache/sccache}"
+    echo "  sccache $(sccache --version) → cache at ''${SCCACHE_DIR:-~/.cache/sccache}"
     echo "  mold    $(mold --version)"
     echo ""
     echo "First-time setup:"
