@@ -23,10 +23,18 @@
 //! # Ok::<(), verovio::Error>(())
 //! ```
 //!
-//! Benchmarked at ~30× faster than the FFI round-trip even on a tiny
-//! one-bar fixture; the gap widens as the score grows because the FFI
-//! cost is fixed-per-call but `sounding_at` only walks the prefix of
-//! events up to `ms`.
+//! Benchmarked at ~**100× faster** than the FFI round-trip on a one-bar PAE
+//! fixture (release build, Verovio 6.2.1, criterion `--quick`):
+//!
+//! | Path                            | Per call |
+//! |---------------------------------|----------|
+//! | `Toolkit::elements_at_time(ms)` | 2.21 µs  |
+//! | `lookup::sounding_at(&tm, ms)`  | 26 ns    |
+//! | `lookup::sounding_at_into(…)`   | 22 ns    |
+//!
+//! The gap widens as the score grows: FFI + JSON cost is fixed per call,
+//! while `sounding_at` only walks events with `tstamp <= ms` and amortizes
+//! across many lookups of similar timestamps.
 
 use std::collections::BTreeSet;
 
