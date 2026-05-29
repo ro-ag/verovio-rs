@@ -6,6 +6,7 @@
 //! SIGABRTs the process; the guard converts that into
 //! [`Error::RenderFailed`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -388,6 +389,68 @@ impl Toolkit {
     pub fn expansion_map(&mut self) -> Result<ExpansionMap> {
         let json = self.render_to_expansion_map()?;
         Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Build a side-table mapping every element ID in the rendered SVG to
+    /// the **1-indexed staff number** it belongs to. The numbering matches
+    /// upstream — staff 1 is the first `<staff n="1">` in the MEI, which
+    /// is also Verovio's SMF track 1 (track 0 is meta).
+    ///
+    /// Pairs with [`Self::render_to_midi_bytes_with_policy`] for genuine
+    /// multi-track visual sync: a consumer can color the playing notes
+    /// per track by looking up each currently-sounding ID in the returned
+    /// table and styling by staff number.
+    ///
+    /// # How the staff number is derived
+    ///
+    /// Verovio emits `<g class="staff">` wrappers **per measure**, not
+    /// per logical staff — a 2-measure single-staff score gets 2 wrappers,
+    /// a 1-measure 2-staff score also gets 2 wrappers. The wrappers
+    /// don't carry an `n="…"` attribute either.
+    ///
+    /// The algorithm restarts the staff counter at every `<g class="measure">`
+    /// and assigns 1, 2, … to staff wrappers in document order within that
+    /// measure. This matches the source MEI's `<staff n="N">` ordering: the
+    /// k-th staff wrapper inside a measure is staff k.
+    ///
+    /// Cost: renders every page to SVG and parses it. For multi-page
+    /// scores this is `pages × (SVG render + XML parse)` — meaningful but
+    /// paid once per loaded document and cacheable by the consumer. Don't
+    /// call per frame.
+    ///
+    /// Returns [`Error::Xml`] if any page's SVG fails to parse (would be
+    /// a Verovio bug, not a user error).
+    pub fn staff_map(&mut self) -> Result<HashMap<String, u32>> {
+        let mut out = HashMap::new();
+        let pages = self.page_count();
+        for page in 1..=pages {
+            let svg = self.render_to_svg(page)?;
+            let doc = roxmltree::Document::parse(&svg).map_err(|e| Error::Xml(e.to_string()))?;
+
+            for measure in doc.descendants().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "g"
+                    && n.attribute("class") == Some("measure")
+            }) {
+                let mut staff_idx: u32 = 0;
+                for staff in measure.descendants().filter(|n| {
+                    n.is_element()
+                        && n.tag_name().name() == "g"
+                        && n.attribute("class") == Some("staff")
+                }) {
+                    staff_idx += 1;
+                    for desc in staff.descendants() {
+                        if let Some(id) = desc.attribute("id") {
+                            // or_insert so a tied-over id (appearing in
+                            // multiple measures) resolves to the same staff
+                            // number both times.
+                            out.entry(id.to_string()).or_insert(staff_idx);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Build a side-table classifying every element ID that appears in the
