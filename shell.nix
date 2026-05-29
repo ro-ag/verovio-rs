@@ -39,7 +39,14 @@ pkgs.mkShell {
   # Scoped to the dev shell rather than `.cargo/config.toml` so the crate
   # remains buildable on a host without mold installed (e.g. a crates.io
   # consumer or this same workspace outside `nix-shell`).
-  RUSTFLAGS = "-C link-arg=-fuse-ld=mold";
+  #
+  # Also embed Nix's glibc as an rpath: on a NixOS host this is redundant
+  # (the cc-wrapper already injects NIX_LDFLAGS), but on an Ubuntu CI runner
+  # with `cachix/install-nix-action`, the produced binary would otherwise
+  # NEED `__nptl_change_stack_perm` (a GLIBC_PRIVATE symbol from Nix's
+  # newer glibc) and fail at startup when ld.so finds Ubuntu's older
+  # libc.so.6 first.
+  RUSTFLAGS = "-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,${pkgs.stdenv.cc.libc.out}/lib";
 
   shellHook = ''
     echo "verovio-rs dev shell:"
