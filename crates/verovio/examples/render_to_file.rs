@@ -36,7 +36,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     tk.load_data(SAMPLE_PAE)?;
 
     let pages = tk.page_count();
-    println!("verovio {}: rendering {pages} page(s) to {}", tk.version(), out_dir.display());
+    println!(
+        "verovio {}: rendering {pages} page(s) to {}",
+        tk.version(),
+        out_dir.display()
+    );
 
     // Reuse one buffer across all pages — the `_into` variant clears and
     // refills it on each call, avoiding per-page String allocation.

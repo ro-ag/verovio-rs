@@ -1,6 +1,27 @@
 //! Safe Rust bindings to [Verovio](https://www.verovio.org/), RISM's C++ music
 //! notation engraver.
 //!
+//! # Quick start
+//!
+//! ```
+//! use verovio::Toolkit;
+//!
+//! let mut tk = Toolkit::new();
+//! tk.load_data(
+//!     "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:\n@data:'4G/4-\n@end:s\n"
+//! )?;
+//!
+//! for page in 1..=tk.page_count() {
+//!     let svg = tk.render_to_svg(page)?;
+//!     // … write to disk or render in a UI
+//!     # let _ = svg;
+//! }
+//! # Ok::<(), verovio::Error>(())
+//! ```
+//!
+//! See also [`Toolkit::render_to_svg_into`] for the buffer-reuse variant
+//! recommended for tight render loops.
+//!
 //! # Status
 //!
 //! API surface for xpart's needs: [`Toolkit::new`], [`Toolkit::load_data`],
