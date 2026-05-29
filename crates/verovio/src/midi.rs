@@ -50,7 +50,7 @@ use midly::{
     MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind,
 };
 
-use crate::TempoMap;
+use crate::{MeasureInfo, TempoMap};
 
 /// Per-track overrides applied to a Verovio SMF by [`apply_track_policy`].
 ///
@@ -108,6 +108,18 @@ pub struct TrackOverride {
     /// gradual swells / dynamic shaping, while volume sets a track's
     /// nominal level.
     pub expression: Option<u8>,
+
+    /// CC#1 (Modulation) value (0-127) inserted at start of the track.
+    /// Usually controls vibrato depth on synths.
+    pub modulation: Option<u8>,
+
+    /// CC#91 (Reverb Send / Effects 1 Depth) value (0-127) at start.
+    /// On GM synths sets the wet-mix amount for the reverb effect.
+    pub reverb: Option<u8>,
+
+    /// CC#93 (Chorus Send / Effects 3 Depth) value (0-127) at start.
+    /// On GM synths sets the wet-mix amount for the chorus effect.
+    pub chorus: Option<u8>,
 }
 
 /// Per-track policy applied to a Verovio SMF. Combine with
@@ -150,6 +162,12 @@ pub struct MidiTrackPolicy {
     /// If `true`, sets [`Self::key_signature`]'s mode bit to minor.
     /// Ignored if `key_signature` is `None`. Default `false` (major).
     pub key_signature_minor: bool,
+
+    /// Auto-insert a `MetaMessage::Marker` on the meta track at the start
+    /// of every measure, labeled with the measure's MEI ID. Useful for
+    /// navigation in DAWs that surface SMF markers as jump points.
+    /// Build the vec with [`crate::Toolkit::measures`] and pass it here.
+    pub measure_markers: Option<Vec<MeasureInfo>>,
 }
 
 /// Apply `policy` to a Verovio-rendered SMF (or any Format-1 SMF) and
@@ -252,6 +270,24 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
             for (i, ev) in prepend_meta.into_iter().enumerate() {
                 meta_track.insert(i, ev);
             }
+        }
+
+        // Insert MetaMessage::Marker events at measure boundaries.
+        if let Some(measures) = &policy.measure_markers {
+            let mut events_abs = absolute_ticks(meta_track);
+            for m in measures {
+                let denom = m.start_qfrac[1] as f64;
+                if denom == 0.0 {
+                    continue;
+                }
+                let q = m.start_qfrac[0] as f64 / denom;
+                let tick = (q * tpq as f64).round() as u64;
+                let label: &'static [u8] =
+                    Box::leak(m.id.clone().into_bytes().into_boxed_slice());
+                events_abs.push((tick, TrackEventKind::Meta(MetaMessage::Marker(label))));
+            }
+            events_abs.sort_by_key(|(t, _)| *t);
+            *meta_track = delta_encode(events_abs);
         }
     }
 
@@ -360,6 +396,42 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
                         message: MidiMessage::Controller {
                             controller: u7::from(11),
                             value: u7::from(expression & 0x7F),
+                        },
+                    },
+                });
+            }
+            if let Some(modulation) = o.modulation {
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(1),
+                            value: u7::from(modulation & 0x7F),
+                        },
+                    },
+                });
+            }
+            if let Some(reverb) = o.reverb {
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(91),
+                            value: u7::from(reverb & 0x7F),
+                        },
+                    },
+                });
+            }
+            if let Some(chorus) = o.chorus {
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(93),
+                            value: u7::from(chorus & 0x7F),
                         },
                     },
                 });

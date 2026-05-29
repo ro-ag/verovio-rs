@@ -454,6 +454,77 @@ fn expression_override_inserts_cc11() {
     assert_eq!(found, Some(96));
 }
 
+#[test]
+fn modulation_reverb_chorus_overrides_insert_their_ccs() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            modulation: Some(20),
+            reverb: Some(40),
+            chorus: Some(50),
+            ..Default::default()
+        },
+    );
+    let policy = MidiTrackPolicy { overrides, ..MidiTrackPolicy::default() };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut found_cc = std::collections::HashMap::new();
+    for ev in &smf.tracks[1] {
+        if let TrackEventKind::Midi {
+            message: MidiMessage::Controller { controller, value },
+            ..
+        } = &ev.kind
+        {
+            found_cc
+                .entry(controller.as_int())
+                .or_insert(value.as_int());
+        }
+    }
+    assert_eq!(found_cc.get(&1), Some(&20), "CC#1 modulation");
+    assert_eq!(found_cc.get(&91), Some(&40), "CC#91 reverb");
+    assert_eq!(found_cc.get(&93), Some(&50), "CC#93 chorus");
+}
+
+#[test]
+fn measure_markers_inserts_one_marker_per_measure() {
+    // PAE with multiple measures, each marker should land on the meta track.
+    let mut tk = Toolkit::from_data(MANY_MEASURE_PAE).expect("PAE load");
+    let measures = tk.measures().expect("measures");
+    let policy = MidiTrackPolicy {
+        measure_markers: Some(measures.clone()),
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut markers: Vec<String> = Vec::new();
+    for ev in &smf.tracks[0] {
+        if let TrackEventKind::Meta(MetaMessage::Marker(b)) = &ev.kind {
+            markers.push(String::from_utf8_lossy(b).into_owned());
+        }
+    }
+    assert_eq!(
+        markers.len(),
+        measures.len(),
+        "expected one marker per measure, got markers={markers:?}, measures={}",
+        measures.len()
+    );
+    // Markers should be in the same order as the measures (ascending tstamp).
+    for (m, marker_text) in measures.iter().zip(markers.iter()) {
+        assert_eq!(*marker_text, m.id);
+    }
+}
+
+const MANY_MEASURE_PAE: &str =
+    "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+
 // -- SMF-level meta overrides -----------------------------------------------
 
 #[test]
