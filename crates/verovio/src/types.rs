@@ -7,9 +7,32 @@
 //! callers that want to forward the payload verbatim — e.g. across a web
 //! protocol that already does its own deserialization.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+
+/// Structural classification of a single MEI element ID, as reported by
+/// [`Toolkit::classified_elements`](crate::Toolkit::classified_elements).
+///
+/// Lets a playback driver filter highlights by element type ("color only
+/// notes; ignore the chord-frame and rest IDs").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum ElementKind {
+    /// A pitched note.
+    Note,
+    /// A chord container holding several notes.
+    Chord,
+    /// A rest of any duration.
+    Rest,
+    /// A measure / barline ID.
+    Measure,
+}
+
+/// Side-table mapping element ID → its [`ElementKind`].
+///
+/// Build with [`Toolkit::classified_elements`](crate::Toolkit::classified_elements).
+/// Pre-computed once per loaded document; lookup is O(1) `HashMap` access.
+pub type ClassifiedElements = HashMap<String, ElementKind>;
 
 /// Expansion map: original MEI element ID → ordered list of expanded IDs
 /// as they appear in playback. An id that's played twice appears twice in

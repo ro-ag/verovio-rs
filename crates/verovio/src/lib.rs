@@ -56,5 +56,6 @@ pub use error::{Error, Result};
 pub use log::{set_log_level, LogLevel};
 pub use toolkit::Toolkit;
 pub use types::{
-    ElementsAtTime, ExpansionMap, TempoChange, TempoMap, Timemap, TimemapEvent, TimemapEventExact,
+    ClassifiedElements, ElementKind, ElementsAtTime, ExpansionMap, TempoChange, TempoMap, Timemap,
+    TimemapEvent, TimemapEventExact,
 };

@@ -12,7 +12,10 @@ use std::sync::OnceLock;
 use cxx::UniquePtr;
 use verovio_sys::ffi;
 
-use crate::{ElementsAtTime, Error, ExpansionMap, Result, TempoMap, Timemap, TimemapEventExact};
+use crate::{
+    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, Result, TempoMap,
+    Timemap, TimemapEventExact,
+};
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
 /// the first time the toolkit is constructed; reuse on subsequent calls.
@@ -352,6 +355,41 @@ impl Toolkit {
     pub fn expansion_map(&mut self) -> Result<ExpansionMap> {
         let json = self.render_to_expansion_map()?;
         Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Build a side-table classifying every element ID that appears in the
+    /// timemap by structural kind (note / chord / rest / measure). Returned
+    /// `HashMap` supports O(1) lookup of "is this id a note?" — useful for
+    /// playback drivers that want to filter highlights by element type.
+    ///
+    /// Pre-compute once per loaded document; the returned table is
+    /// invariant under playback (it depends only on the score structure).
+    ///
+    /// Implementation note: walks the timemap's event tstamps and calls
+    /// [`Self::elements_at`] at each (one FFI + JSON parse per event).
+    /// Cost is `N events × ~2.4 µs` — ~250 µs for a 100-event score, paid
+    /// once per `load_data`.
+    pub fn classified_elements(&mut self) -> Result<ClassifiedElements> {
+        // Collect tstamps first so the borrow on `self.timemap()` is released
+        // before the per-event `self.elements_at(...)` calls.
+        let tstamps: Vec<f64> = self.timemap()?.iter().map(|e| e.tstamp).collect();
+        let mut out: ClassifiedElements = ClassifiedElements::default();
+        for ms in tstamps {
+            let els = self.elements_at(ms as u32)?;
+            for id in els.notes {
+                out.insert(id, ElementKind::Note);
+            }
+            for id in els.chords {
+                out.insert(id, ElementKind::Chord);
+            }
+            for id in els.rests {
+                out.insert(id, ElementKind::Rest);
+            }
+            if let Some(m) = els.measure {
+                out.insert(m, ElementKind::Measure);
+            }
+        }
+        Ok(out)
     }
 
     /// Extract the tempo changes from the document as a [`TempoMap`] — the
