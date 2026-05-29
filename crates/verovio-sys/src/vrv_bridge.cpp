@@ -10,6 +10,10 @@ rust::String get_version(const vrv::Toolkit &tk) {
     return rust::String(tk.GetVersion());
 }
 
+bool set_resource_path(vrv::Toolkit &tk, rust::Str path) {
+    return tk.SetResourcePath(std::string(path));
+}
+
 bool load_data(vrv::Toolkit &tk, rust::Str data) {
     return tk.LoadData(std::string(data));
 }

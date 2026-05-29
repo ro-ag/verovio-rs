@@ -10,4 +10,6 @@ authors.workspace = true
 
 [dependencies]
 verovio-sys = { path = "../verovio-sys", version = "0.1.0" }
+verovio-data = { path = "../verovio-data", version = "0.1.0" }
 cxx.workspace = true
+tempfile.workspace = true

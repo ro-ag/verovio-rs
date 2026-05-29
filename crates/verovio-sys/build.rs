@@ -71,19 +71,44 @@ fn main() {
     }
     bridge_build.compile("verovio_bridge");
 
-    // C++ runtime. NixOS-specific libstdc++ rpath discovery happens in the
-    // verovio safe-wrapper crate's build.rs (rustc-link-arg doesn't propagate
-    // from -sys to downstream binaries).
+    // C++ runtime.
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=dylib=c++");
     } else {
         println!("cargo:rustc-link-lib=dylib=stdc++");
+        emit_libstdcxx_rpath_for_own_tests();
     }
 
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/vrv_bridge.cpp");
     println!("cargo:rerun-if-changed=include/vrv_bridge.h");
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+/// On NixOS the C++ runtime sits under `/nix/store/<hash>-gcc-*-lib/lib` with
+/// no FHS path. Discover it via the host compiler and emit an rpath that
+/// applies to this crate's own benchmarks/binaries/examples/tests.
+///
+/// `cargo:rustc-link-arg` propagates only to targets in the same package as
+/// the emitting build.rs — the `verovio` safe-wrapper crate emits the same
+/// rpath for its own targets in its own build.rs.
+fn emit_libstdcxx_rpath_for_own_tests() {
+    let Ok(out) = std::process::Command::new("c++")
+        .arg("-print-file-name=libstdc++.so.6")
+        .output()
+    else {
+        return;
+    };
+    let Ok(path) = std::str::from_utf8(&out.stdout) else {
+        return;
+    };
+    let path = Path::new(path.trim());
+    if !path.is_absolute() {
+        return;
+    }
+    if let Some(libdir) = path.parent() {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", libdir.display());
+    }
 }
 
 fn add_cpp_sources(build: &mut cc::Build, dir: &Path) {

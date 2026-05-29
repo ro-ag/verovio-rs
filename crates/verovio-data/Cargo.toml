@@ -1,0 +1,12 @@
+[package]
+name = "verovio-data"
+description = "SMuFL font and resource files bundled for the Verovio engraver."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+include_dir.workspace = true

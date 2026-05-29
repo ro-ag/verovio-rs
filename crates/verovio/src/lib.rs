@@ -5,8 +5,15 @@
 //!
 //! Pre-rendering slice: [`Toolkit::new`], [`Toolkit::load_data`],
 //! [`Toolkit::page_count`], and the option getters/setters are exposed.
-//! `render_to_svg` and friends land once the `verovio-data` crate ships the
-//! Bravura font on disk for `SetResourcePath`.
+//! `render_to_svg` and friends land in the next slice.
+//!
+//! # Resource files
+//!
+//! On first [`Toolkit::new`] call, the [`verovio_data`] crate's bundled SMuFL
+//! resources are extracted to a process-lifetime temporary directory and
+//! handed to Verovio via `SetResourcePath`. Subsequent toolkit constructions
+//! reuse the same extraction. Verovio refuses to parse any input until
+//! resources are available.
 //!
 //! # Thread safety
 //!
@@ -15,8 +22,29 @@
 //! threads is unsound. For concurrent rendering, construct one `Toolkit` per
 //! thread or use a single worker thread fronted by a channel.
 
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
 use cxx::UniquePtr;
 use verovio_sys::ffi;
+
+/// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
+/// the first time the toolkit is constructed; reuse on subsequent calls.
+///
+/// The tempdir is intentionally leaked (`TempDir::keep`) — it lives for the
+/// process lifetime so any `Toolkit` that points at it stays valid.
+fn resource_path() -> &'static Path {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let tmp = tempfile::Builder::new()
+            .prefix("verovio-data-")
+            .tempdir()
+            .expect("failed to create tempdir for Verovio resources");
+        verovio_data::extract(tmp.path()).expect("failed to extract bundled Verovio resources");
+        tmp.keep()
+    })
+    .as_path()
+}
 
 /// A Verovio engraving toolkit.
 ///
@@ -59,15 +87,26 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Toolkit {
-    /// Construct a new toolkit without initializing the SMuFL font registry.
+    /// Construct a new toolkit.
     ///
-    /// Font init requires resource files staged on disk; until the
-    /// `verovio-data` crate ships, callers must arrange resources themselves
-    /// before any rendering.
+    /// Stages the bundled `verovio-data` SMuFL resources on disk (once per
+    /// process) and points Verovio at them via `SetResourcePath`. Returns a
+    /// toolkit that is ready to accept [`Self::load_data`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bundled resources can't be extracted to a tempdir or
+    /// Verovio rejects the resource path. Both are environment-level failures
+    /// (e.g. read-only `$TMPDIR`) — there's nothing meaningful a caller could
+    /// do with a `Result` here.
     pub fn new() -> Self {
-        Self {
-            inner: ffi::new_toolkit(false),
-        }
+        let mut inner = ffi::new_toolkit(false);
+        let path = resource_path()
+            .to_str()
+            .expect("Verovio resource path must be UTF-8");
+        let ok = ffi::set_resource_path(inner.pin_mut(), path);
+        assert!(ok, "Verovio rejected SetResourcePath({path})");
+        Self { inner }
     }
 
     /// Return the upstream Verovio version string (e.g. `"6.2.1"`).

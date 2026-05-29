@@ -14,20 +14,13 @@ const SAMPLE_PAE: &str = "\
 ";
 
 #[test]
-#[ignore = "needs verovio-data (SetResourcePath) — Toolkit::LoadData rejects \
-           any input until Resources::Ok() returns true, which requires the \
-           SMuFL fonts staged on disk"]
 fn load_valid_pae() {
     let mut tk = Toolkit::new();
     tk.load_data(SAMPLE_PAE).expect("PAE sample should parse");
 }
 
 #[test]
-fn load_data_returns_err_on_failure() {
-    // Without staged fonts, Verovio's `Resources::Ok()` guard rejects every
-    // input regardless of validity. This test exercises the bool→Result
-    // conversion at the FFI boundary. Once `verovio-data` lands, add a
-    // companion test that loads a valid score and asserts `Ok(())`.
+fn load_invalid_data_fails() {
     let mut tk = Toolkit::new();
     let res = tk.load_data("this is not music notation");
     assert!(matches!(res, Err(Error::LoadFailed)), "got {res:?}");
@@ -57,7 +50,8 @@ fn options_is_json_object() {
 #[test]
 fn set_empty_options_succeeds() {
     let mut tk = Toolkit::new();
-    tk.set_options("{}").expect("empty options object should be valid");
+    tk.set_options("{}")
+        .expect("empty options object should be valid");
 }
 
 #[test]
@@ -68,13 +62,11 @@ fn set_options_with_invalid_json_fails() {
 }
 
 #[test]
-#[ignore = "needs verovio-data — see load_valid_pae"]
-fn page_count_after_load_is_sensible() {
+fn page_count_after_load_is_at_least_one() {
     let mut tk = Toolkit::new();
     tk.load_data(SAMPLE_PAE).unwrap();
-    // Without staged fonts the layout pass may still complete (ABC is small)
-    // — assert only that the value is bounded, not that it's >= 1.
     let pages = tk.page_count();
+    assert!(pages >= 1, "expected at least one page, got {pages}");
     assert!(pages <= 1000, "page_count returned absurd value: {pages}");
 }
 

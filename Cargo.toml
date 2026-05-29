@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/verovio-sys", "crates/verovio"]
+members = ["crates/verovio-sys", "crates/verovio", "crates/verovio-data"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,8 @@ authors = ["Rodrigo Agurto <12665665+ro-ag@users.noreply.github.com>"]
 cxx = "1.0"
 cxx-build = "1.0"
 cc = "1.2"
+include_dir = "0.7"
+tempfile = "3.10"
 
 [profile.release]
 lto = "thin"

@@ -10,6 +10,11 @@ pub mod ffi {
 
         fn get_version(tk: &Toolkit) -> String;
 
+        /// Point Verovio at a directory containing SMuFL font data
+        /// (Bravura.xml, Bravura/, etc.). Returns true on success. Must
+        /// succeed before any LoadData / RenderTo* call.
+        fn set_resource_path(tk: Pin<&mut Toolkit>, path: &str) -> bool;
+
         // LoadData and SetOptions return bool: true on success, false on
         // failure (Verovio logs the reason internally; the log surface is
         // gated by a crate-level mutex in the safe wrapper).
