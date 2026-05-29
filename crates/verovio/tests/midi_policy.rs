@@ -138,6 +138,7 @@ fn explicit_channel_override_takes_precedence() {
     let policy = MidiTrackPolicy {
         overrides,
         auto_distribute_channels: true, // would put track 2 on ch 1 — overridden
+        ..MidiTrackPolicy::default()
     };
     let bytes = tk
         .render_to_midi_bytes_with_policy(&policy)
@@ -170,6 +171,7 @@ fn program_override_inserts_program_change() {
     let policy = MidiTrackPolicy {
         overrides,
         auto_distribute_channels: true,
+        ..MidiTrackPolicy::default()
     };
     let bytes = tk
         .render_to_midi_bytes_with_policy(&policy)
@@ -245,6 +247,205 @@ fn mute_zeros_every_note_on_velocity_on_that_track() {
     assert!(
         t2_vels.iter().all(|&v| v == 0),
         "track 2 mute should zero all velocities, got {t2_vels:?}"
+    );
+}
+
+// -- TrackName / InstrumentName / sustain -----------------------------------
+
+#[test]
+fn name_override_inserts_track_name_meta() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            name: Some("Treble".to_string()),
+            ..Default::default()
+        },
+    );
+    overrides.insert(
+        2,
+        TrackOverride {
+            name: Some("Bass".to_string()),
+            ..Default::default()
+        },
+    );
+    let policy = MidiTrackPolicy {
+        overrides,
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    // Walk each track's meta events and find a TrackName.
+    let find_name = |track_idx: usize| -> Option<String> {
+        for ev in &smf.tracks[track_idx] {
+            if let TrackEventKind::Meta(MetaMessage::TrackName(bytes)) = &ev.kind {
+                return Some(String::from_utf8_lossy(bytes).into_owned());
+            }
+        }
+        None
+    };
+    assert_eq!(find_name(1).as_deref(), Some("Treble"));
+    assert_eq!(find_name(2).as_deref(), Some("Bass"));
+}
+
+#[test]
+fn instrument_name_override_inserts_instrument_name_meta() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            instrument_name: Some("Grand Piano".to_string()),
+            ..Default::default()
+        },
+    );
+    let policy = MidiTrackPolicy {
+        overrides,
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut found = None;
+    for ev in &smf.tracks[1] {
+        if let TrackEventKind::Meta(MetaMessage::InstrumentName(bytes)) = &ev.kind {
+            found = Some(String::from_utf8_lossy(bytes).into_owned());
+            break;
+        }
+    }
+    assert_eq!(found.as_deref(), Some("Grand Piano"));
+}
+
+#[test]
+fn sustain_override_inserts_cc64() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            sustain: Some(true),
+            ..Default::default()
+        },
+    );
+    overrides.insert(
+        2,
+        TrackOverride {
+            sustain: Some(false),
+            ..Default::default()
+        },
+    );
+    let policy = MidiTrackPolicy {
+        overrides,
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let find_cc64 = |track_idx: usize| -> Option<u8> {
+        for ev in &smf.tracks[track_idx] {
+            if let TrackEventKind::Midi {
+                message: MidiMessage::Controller { controller, value },
+                ..
+            } = &ev.kind
+            {
+                if controller.as_int() == 64 {
+                    return Some(value.as_int());
+                }
+            }
+        }
+        None
+    };
+    assert_eq!(
+        find_cc64(1),
+        Some(127),
+        "sustain Some(true) → pedal down (127)"
+    );
+    assert_eq!(find_cc64(2), Some(0), "sustain Some(false) → pedal up (0)");
+}
+
+// -- SMF-level meta overrides -----------------------------------------------
+
+#[test]
+fn time_signature_override_inserts_meta() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let policy = MidiTrackPolicy {
+        time_signature: Some((6, 8)),
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut found = None;
+    for ev in &smf.tracks[0] {
+        if let TrackEventKind::Meta(MetaMessage::TimeSignature(num, denom_power, _, _)) = &ev.kind {
+            found = Some((*num, 1u8 << *denom_power));
+            break;
+        }
+    }
+    assert_eq!(found, Some((6, 8)));
+}
+
+#[test]
+fn key_signature_override_inserts_meta() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let policy = MidiTrackPolicy {
+        key_signature: Some(2), // D major (or B minor with key_signature_minor=true)
+        key_signature_minor: false,
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut found = None;
+    for ev in &smf.tracks[0] {
+        if let TrackEventKind::Meta(MetaMessage::KeySignature(sf, minor)) = &ev.kind {
+            found = Some((*sf, *minor));
+            break;
+        }
+    }
+    assert_eq!(found, Some((2, false)));
+}
+
+#[test]
+fn tempo_override_replaces_existing_tempo_events() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let custom_tempo = verovio::TempoMap::new(vec![verovio::TempoChange {
+        at_qstamp: 0.0,
+        bpm: 60.0,
+    }]);
+    let policy = MidiTrackPolicy {
+        tempo_override: Some(custom_tempo),
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    // Default Verovio tempo is 120 BPM → 500_000 µs/qtr.
+    // Our override is 60 BPM → 1_000_000 µs/qtr.
+    let mut tempos_us = Vec::new();
+    for ev in &smf.tracks[0] {
+        if let TrackEventKind::Meta(MetaMessage::Tempo(t)) = &ev.kind {
+            tempos_us.push(t.as_int());
+        }
+    }
+    assert_eq!(
+        tempos_us,
+        vec![1_000_000],
+        "expected exactly one Tempo at 60 BPM"
     );
 }
 
@@ -330,6 +531,7 @@ fn summarize_reflects_policy_after_application() {
     let policy = MidiTrackPolicy {
         overrides,
         auto_distribute_channels: true,
+        ..MidiTrackPolicy::default()
     };
     let bytes = tk
         .render_to_midi_bytes_with_policy(&policy)

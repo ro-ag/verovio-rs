@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let policy = MidiTrackPolicy {
         overrides,
         auto_distribute_channels: true,
+        ..MidiTrackPolicy::default()
     };
 
     let bytes = tk.render_to_midi_bytes_with_policy(&policy)?;

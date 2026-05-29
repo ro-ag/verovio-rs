@@ -46,9 +46,11 @@
 use std::collections::BTreeMap;
 
 use midly::{
-    num::{u4, u7},
-    MetaMessage, MidiMessage, Smf, TrackEvent, TrackEventKind,
+    num::{u24, u4, u7},
+    MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind,
 };
+
+use crate::TempoMap;
 
 /// Per-track overrides applied to a Verovio SMF by [`apply_track_policy`].
 ///
@@ -79,6 +81,21 @@ pub struct TrackOverride {
     /// `0` = hard left, `64` = center, `127` = hard right. `None` leaves
     /// the synth default (typically center 64).
     pub pan: Option<u8>,
+
+    /// `MetaMessage::TrackName` inserted at the start of the track. DAWs
+    /// surface this as the track's display name; useful for importing
+    /// Verovio's output into Logic / Ableton / Reaper / etc.
+    pub name: Option<String>,
+
+    /// `MetaMessage::InstrumentName` inserted at the start of the track.
+    /// Some DAWs prefer this over the GM program number for display.
+    pub instrument_name: Option<String>,
+
+    /// CC#64 (Damper / Sustain Pedal). `Some(true)` inserts a "pedal
+    /// down" event at the start (value 127) for sustain on a piano-like
+    /// track; `Some(false)` inserts an explicit "pedal up" (value 0);
+    /// `None` leaves the synth default.
+    pub sustain: Option<bool>,
 }
 
 /// Per-track policy applied to a Verovio SMF. Combine with
@@ -96,6 +113,31 @@ pub struct MidiTrackPolicy {
     /// multi-channel MIDI without writing per-track channel overrides.
     /// Per-track `channel` overrides in [`Self::overrides`] take precedence.
     pub auto_distribute_channels: bool,
+
+    /// Replace Verovio's `MetaMessage::Tempo` events on the meta track
+    /// with events derived from this [`TempoMap`]. Useful for "render at
+    /// constant 80 BPM regardless of score markings" (pass a single-entry
+    /// TempoMap) or applying a custom tempo curve for practice playback.
+    ///
+    /// Empty / `None` leaves Verovio's tempo events untouched.
+    pub tempo_override: Option<TempoMap>,
+
+    /// Insert a `MetaMessage::TimeSignature` on the meta track at t=0.
+    /// Tuple is `(numerator, denominator)`; e.g. `(4, 4)` for common time
+    /// or `(6, 8)` for compound duple. Verovio's SMF output doesn't emit
+    /// a time-signature meta event, so DAWs importing the file fall back
+    /// to 4/4; setting this fixes that.
+    pub time_signature: Option<(u8, u8)>,
+
+    /// Insert a `MetaMessage::KeySignature` on the meta track at t=0.
+    /// Value is the SMF convention: `0` for C major / A minor, positive
+    /// for sharps (+1 = G major / E minor), negative for flats
+    /// (-1 = F major / D minor). Range -7..=7.
+    pub key_signature: Option<i8>,
+
+    /// If `true`, sets [`Self::key_signature`]'s mode bit to minor.
+    /// Ignored if `key_signature` is `None`. Default `false` (major).
+    pub key_signature_minor: bool,
 }
 
 /// Apply `policy` to a Verovio-rendered SMF (or any Format-1 SMF) and
@@ -110,7 +152,97 @@ pub fn apply_track_policy(smf_bytes: &[u8], policy: &MidiTrackPolicy) -> Option<
     Some(out)
 }
 
+/// Convert a u32 tick count into an SMF `Smf`-friendly delta-encoded
+/// `(absolute_tick, kind)` tuple. Used by tempo-override rewriting.
+fn absolute_ticks<'a>(track: &[TrackEvent<'a>]) -> Vec<(u64, TrackEventKind<'a>)> {
+    let mut out = Vec::with_capacity(track.len());
+    let mut tick: u64 = 0;
+    for ev in track {
+        tick += u32::from(ev.delta) as u64;
+        out.push((tick, ev.kind.clone()));
+    }
+    out
+}
+
+/// Convert back from absolute ticks to a delta-encoded track.
+fn delta_encode<'a>(events: Vec<(u64, TrackEventKind<'a>)>) -> Vec<TrackEvent<'a>> {
+    let mut out = Vec::with_capacity(events.len());
+    let mut last_tick: u64 = 0;
+    for (tick, kind) in events {
+        let delta = (tick - last_tick) as u32;
+        out.push(TrackEvent {
+            delta: delta.into(),
+            kind,
+        });
+        last_tick = tick;
+    }
+    out
+}
+
+fn apply_tempo_override<'a>(meta_track: &mut Vec<TrackEvent<'a>>, tempo_map: &TempoMap, tpq: u64) {
+    if tempo_map.changes.is_empty() {
+        return;
+    }
+    let mut events_abs = absolute_ticks(meta_track);
+    // Drop any existing tempo events.
+    events_abs.retain(|(_, kind)| !matches!(kind, TrackEventKind::Meta(MetaMessage::Tempo(_))));
+    // Insert one Tempo meta event per TempoChange at the matching tick.
+    for change in &tempo_map.changes {
+        let tick = (change.at_qstamp * tpq as f64).round() as u64;
+        let uspq = (60_000_000.0 / change.bpm).round().max(1.0) as u32;
+        events_abs.push((
+            tick,
+            TrackEventKind::Meta(MetaMessage::Tempo(u24::from(uspq.min(0x00FF_FFFF)))),
+        ));
+    }
+    // Stable sort by tick keeps EndOfTrack at the tail among same-tick events.
+    events_abs.sort_by_key(|(t, _)| *t);
+    *meta_track = delta_encode(events_abs);
+}
+
 fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf<'a> {
+    // Resolve ticks-per-quarter from the SMF header — needed for any
+    // tick-based meta rewriting below.
+    let tpq: u64 = match smf.header.timing {
+        Timing::Metrical(t) => t.as_int() as u64,
+        Timing::Timecode(_, _) => 480, // Verovio doesn't emit SMPTE; reasonable fallback.
+    };
+
+    // Tempo override / time-sig / key-sig affect the meta track (index 0).
+    if !smf.tracks.is_empty() {
+        let meta_track = &mut smf.tracks[0];
+
+        if let Some(tempo_map) = &policy.tempo_override {
+            apply_tempo_override(meta_track, tempo_map, tpq);
+        }
+
+        // Prepend time/key signature meta events at the start of the
+        // meta track. Order: TimeSig before KeySig (DAW convention).
+        let mut prepend_meta: Vec<TrackEvent<'a>> = Vec::new();
+        if let Some((num, denom)) = policy.time_signature {
+            // SMF denominator is the power: 4 → 2 (2^2 = 4), 8 → 3, etc.
+            let denom_power = denom.trailing_zeros().min(7) as u8;
+            prepend_meta.push(TrackEvent {
+                delta: 0.into(),
+                kind: TrackEventKind::Meta(MetaMessage::TimeSignature(num, denom_power, 24, 8)),
+            });
+        }
+        if let Some(sf) = policy.key_signature {
+            prepend_meta.push(TrackEvent {
+                delta: 0.into(),
+                kind: TrackEventKind::Meta(MetaMessage::KeySignature(
+                    sf,
+                    policy.key_signature_minor,
+                )),
+            });
+        }
+        if !prepend_meta.is_empty() {
+            for (i, ev) in prepend_meta.into_iter().enumerate() {
+                meta_track.insert(i, ev);
+            }
+        }
+    }
+
     for (idx, track) in smf.tracks.iter_mut().enumerate() {
         let track_index = idx as u32;
         let override_ = policy.overrides.get(&track_index);
@@ -178,6 +310,40 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
                             value: u7::from(pan & 0x7F),
                         },
                     },
+                });
+            }
+            if let Some(sustain_down) = o.sustain {
+                let value: u8 = if sustain_down { 127 } else { 0 };
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(64),
+                            value: u7::from(value & 0x7F),
+                        },
+                    },
+                });
+            }
+            if let Some(name) = &o.name {
+                // midly's MetaMessage variants borrow from the SMF's
+                // input buffer, so we leak a Vec into a 'static slice.
+                // For our use case the policy is short-lived and the
+                // produced SMF is immediately serialized, but keeping
+                // ownership through a 'static escape is the cleanest
+                // way to satisfy midly's lifetime parameter.
+                let leaked: &'static [u8] = Box::leak(name.clone().into_bytes().into_boxed_slice());
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Meta(MetaMessage::TrackName(leaked)),
+                });
+            }
+            if let Some(iname) = &o.instrument_name {
+                let leaked: &'static [u8] =
+                    Box::leak(iname.clone().into_bytes().into_boxed_slice());
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Meta(MetaMessage::InstrumentName(leaked)),
                 });
             }
             if !prepend.is_empty() {
