@@ -104,6 +104,31 @@ fn render_to_midi_without_loaded_data_fails() {
     );
 }
 
+#[test]
+fn render_to_midi_bytes_returns_standard_midi_file_header() {
+    let mut tk = loaded_toolkit();
+    let bytes = tk.render_to_midi_bytes().expect("midi bytes");
+    // SMF starts with the 4-byte "MThd" magic followed by a 4-byte big-endian
+    // header length of 6. Verifying the magic round-trips proves both
+    // the C++ render path and our base64 decode produced the right payload.
+    assert!(
+        bytes.starts_with(b"MThd"),
+        "expected MThd magic, got first 8 bytes: {:?}",
+        &bytes[..bytes.len().min(8)]
+    );
+    assert!(bytes.len() > 14, "SMF must be longer than the header");
+}
+
+#[test]
+fn render_to_midi_bytes_without_loaded_data_fails() {
+    let mut tk = Toolkit::new();
+    let res = tk.render_to_midi_bytes();
+    assert!(
+        matches!(res, Err(Error::RenderFailed { page: 0 })),
+        "got {res:?}"
+    );
+}
+
 // Verovio's render path asserts inside `Doc::GetVisibleScores` on an empty
 // doc (`m_visibleScores.empty()`) and SIGABRTs the whole process. The safe
 // wrapper guards every render-family method by checking `page_count() == 0`

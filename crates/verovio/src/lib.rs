@@ -214,6 +214,10 @@ pub enum Error {
     /// [`Toolkit::elements_at`]). Indicates a shape mismatch between what
     /// Verovio produced and the Rust struct we expected.
     Json(serde_json::Error),
+    /// Base64 decode failure inside [`Toolkit::render_to_midi_bytes`].
+    /// Verovio is expected to emit well-formed base64; this would be a
+    /// bug upstream rather than a user error.
+    Base64(base64::DecodeError),
 }
 
 impl std::fmt::Display for Error {
@@ -227,6 +231,7 @@ impl std::fmt::Display for Error {
             }
             Error::Io(e) => write!(f, "I/O error reading score file: {e}"),
             Error::Json(e) => write!(f, "JSON parse error from Verovio output: {e}"),
+            Error::Base64(e) => write!(f, "base64 decode error from Verovio MIDI output: {e}"),
         }
     }
 }
@@ -236,6 +241,7 @@ impl std::error::Error for Error {
         match self {
             Error::Io(e) => Some(e),
             Error::Json(e) => Some(e),
+            Error::Base64(e) => Some(e),
             _ => None,
         }
     }
@@ -250,6 +256,12 @@ impl From<std::io::Error> for Error {
 impl From<serde_json::Error> for Error {
     fn from(e: serde_json::Error) -> Self {
         Error::Json(e)
+    }
+}
+
+impl From<base64::DecodeError> for Error {
+    fn from(e: base64::DecodeError) -> Self {
+        Error::Base64(e)
     }
 }
 
@@ -420,6 +432,19 @@ impl Toolkit {
         }
         out.push_str(&midi);
         Ok(())
+    }
+
+    /// Render to MIDI, decoded into raw SMF (Standard MIDI File) bytes — the
+    /// form you'd write to a `.mid` file. Convenience over the base64 round
+    /// trip of [`Self::render_to_midi`].
+    ///
+    /// Returns [`Error::RenderFailed`] if no document is loaded, or
+    /// [`Error::Base64`] if Verovio's output is malformed (shouldn't happen).
+    pub fn render_to_midi_bytes(&mut self) -> Result<Vec<u8>> {
+        use base64::Engine as _;
+        let b64 = self.render_to_midi()?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes())?;
+        Ok(bytes)
     }
 
     /// Render the document's playback timemap as a JSON string.
