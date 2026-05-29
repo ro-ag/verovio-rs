@@ -1,0 +1,13 @@
+[package]
+name = "verovio"
+description = "Safe Rust bindings to the Verovio music engraving library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+verovio-sys = { path = "../verovio-sys", version = "0.1.0" }
+cxx.workspace = true

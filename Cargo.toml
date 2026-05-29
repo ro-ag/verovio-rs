@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/verovio-sys", "crates/verovio"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "LGPL-3.0-or-later"
+repository = "https://github.com/ro-ag/verovio-rs"
+authors = ["Rodrigo Agurto <12665665+ro-ag@users.noreply.github.com>"]
+
+[workspace.dependencies]
+cxx = "1.0"
+cxx-build = "1.0"
+cmake = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
