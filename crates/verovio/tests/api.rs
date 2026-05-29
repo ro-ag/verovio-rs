@@ -20,6 +20,57 @@ fn load_valid_pae() {
 }
 
 #[test]
+fn from_data_constructs_and_loads() {
+    let tk = Toolkit::from_data(SAMPLE_PAE).expect("from_data should succeed");
+    // Construction + load both succeeded; whether page_count > 0 is checked
+    // separately. Just confirm we got a usable toolkit.
+    assert!(!tk.version().is_empty());
+}
+
+#[test]
+fn load_file_round_trips_a_pae_score() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("score.pae");
+    std::fs::write(&path, SAMPLE_PAE).expect("write fixture");
+
+    let mut tk = Toolkit::new();
+    tk.load_file(&path).expect("load_file should succeed");
+}
+
+#[test]
+fn from_file_constructs_and_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("score.pae");
+    std::fs::write(&path, SAMPLE_PAE).expect("write fixture");
+
+    let tk = Toolkit::from_file(&path).expect("from_file should succeed");
+    assert!(!tk.version().is_empty());
+}
+
+#[test]
+fn load_file_missing_path_returns_io_error() {
+    let mut tk = Toolkit::new();
+    let res = tk.load_file("/this/path/does/not/exist.pae");
+    assert!(
+        matches!(res, Err(Error::Io(_))),
+        "expected Io error, got {res:?}"
+    );
+}
+
+#[test]
+fn from_file_propagates_load_failed_for_bad_content() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("garbage.txt");
+    std::fs::write(&path, "this is not music notation").expect("write");
+
+    let res = Toolkit::from_file(&path);
+    assert!(
+        matches!(res, Err(Error::LoadFailed)),
+        "expected LoadFailed, got {res:?}"
+    );
+}
+
+#[test]
 fn load_invalid_data_fails() {
     let mut tk = Toolkit::new();
     let res = tk.load_data("this is not music notation");

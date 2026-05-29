@@ -83,6 +83,17 @@ pub struct Toolkit {
 // methods without mutex gating, and no `SetLocale`. See the safety contract.
 unsafe impl Send for Toolkit {}
 
+impl std::fmt::Debug for Toolkit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The interesting state (loaded document, options, layout cache)
+        // lives behind the cxx::UniquePtr and isn't safely inspectable
+        // without &mut self. Surface only the version for traceability.
+        f.debug_struct("Toolkit")
+            .field("verovio_version", &self.version())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Error returned by safe Toolkit methods that can fail.
 #[derive(Debug)]
 pub enum Error {
@@ -100,6 +111,8 @@ pub enum Error {
         /// (e.g. timemap).
         page: u32,
     },
+    /// File-IO failure raised by `Toolkit::load_file` / `Toolkit::from_file`.
+    Io(std::io::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -111,11 +124,25 @@ impl std::fmt::Display for Error {
             Error::RenderFailed { page } => {
                 write!(f, "Verovio render returned empty for page {page}")
             }
+            Error::Io(e) => write!(f, "I/O error reading score file: {e}"),
         }
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Io(e)
+    }
+}
 
 /// Result alias for fallible Toolkit operations.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -143,6 +170,22 @@ impl Toolkit {
         Self { inner }
     }
 
+    /// Construct a toolkit and load a score in one step. Equivalent to
+    /// [`Self::new`] followed by [`Self::load_data`].
+    pub fn from_data(data: &str) -> Result<Self> {
+        let mut tk = Self::new();
+        tk.load_data(data)?;
+        Ok(tk)
+    }
+
+    /// Construct a toolkit and load a score from disk in one step.
+    /// Equivalent to [`Self::new`] followed by [`Self::load_file`].
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let mut tk = Self::new();
+        tk.load_file(path)?;
+        Ok(tk)
+    }
+
     /// Return the upstream Verovio version string (e.g. `"6.2.1"`).
     pub fn version(&self) -> String {
         ffi::get_version(&self.inner)
@@ -158,6 +201,16 @@ impl Toolkit {
         } else {
             Err(Error::LoadFailed)
         }
+    }
+
+    /// Read a score from disk and load it. Format auto-detected from the
+    /// file contents (the extension is not consulted).
+    ///
+    /// Returns [`Error::Io`] on filesystem errors, [`Error::LoadFailed`] if
+    /// the parser rejects the content.
+    pub fn load_file(&mut self, path: impl AsRef<std::path::Path>) -> Result<()> {
+        let data = std::fs::read_to_string(path)?;
+        self.load_data(&data)
     }
 
     /// Number of layout pages for the currently-loaded document.
