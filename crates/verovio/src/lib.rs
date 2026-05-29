@@ -49,7 +49,57 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use cxx::UniquePtr;
+use serde::{Deserialize, Serialize};
 use verovio_sys::ffi;
+
+/// One row of the playback timemap: a moment where elements turn on or off.
+///
+/// `tstamp` is in **milliseconds**; `qstamp` is in **quarter-note beats**.
+/// `on` / `off` are MEI element IDs (the same IDs Verovio embeds as `xml:id`
+/// in the SVG output and that [`Toolkit::elements_at_time`] reports).
+/// `tempo` is BPM at this moment (present on the first event and any
+/// subsequent tempo change).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct TimemapEvent {
+    /// Timestamp in milliseconds from the start of playback.
+    pub tstamp: f64,
+    /// Timestamp in quarter-note beats from the start of playback.
+    pub qstamp: f64,
+    /// Element IDs whose articulations begin at this moment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on: Vec<String>,
+    /// Element IDs whose articulations end at this moment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub off: Vec<String>,
+    /// Tempo (BPM) effective from this event onward, when Verovio
+    /// publishes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<f64>,
+}
+
+/// The playhead-sync map for a loaded score: a chronological sequence of
+/// note-on / note-off events with tempo metadata.
+pub type Timemap = Vec<TimemapEvent>;
+
+/// The elements active at a given playback time, as reported by
+/// [`Toolkit::elements_at`].
+///
+/// All vec fields hold MEI element IDs (matching the `xml:id` attributes
+/// in the SVG output). `measure` is the single enclosing measure ID, if
+/// any. `page` is the 1-indexed page number Verovio resolved the time to.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ElementsAtTime {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measure: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rests: Vec<String>,
+}
 
 /// Verbosity threshold for Verovio's internal log channel.
 ///
@@ -160,6 +210,10 @@ pub enum Error {
     },
     /// File-IO failure raised by `Toolkit::load_file` / `Toolkit::from_file`.
     Io(std::io::Error),
+    /// JSON parse failure on a typed accessor ([`Toolkit::timemap`],
+    /// [`Toolkit::elements_at`]). Indicates a shape mismatch between what
+    /// Verovio produced and the Rust struct we expected.
+    Json(serde_json::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -172,6 +226,7 @@ impl std::fmt::Display for Error {
                 write!(f, "Verovio render returned empty for page {page}")
             }
             Error::Io(e) => write!(f, "I/O error reading score file: {e}"),
+            Error::Json(e) => write!(f, "JSON parse error from Verovio output: {e}"),
         }
     }
 }
@@ -180,6 +235,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io(e) => Some(e),
+            Error::Json(e) => Some(e),
             _ => None,
         }
     }
@@ -188,6 +244,12 @@ impl std::error::Error for Error {
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Error::Json(e)
     }
 }
 
@@ -407,9 +469,25 @@ impl Toolkit {
         ffi::redo_layout(self.inner.pin_mut(), options);
     }
 
+    /// Render the timemap parsed into typed [`TimemapEvent`]s — the form
+    /// `xpart` actually consumes. See [`Self::render_to_timemap`] for the
+    /// raw JSON-string variant.
+    pub fn timemap(&mut self) -> Result<Timemap> {
+        let json = self.render_to_timemap()?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Return the elements active at the given playback time as a typed
+    /// [`ElementsAtTime`]. Empty doc returns `Default::default()`.
+    pub fn elements_at(&mut self, millis: u32) -> Result<ElementsAtTime> {
+        let json = self.elements_at_time(millis);
+        Ok(serde_json::from_str(&json)?)
+    }
+
     /// Return the element IDs active at the given playback time, as a JSON
     /// document. The shape upstream is roughly `{notes: [...], page: N}`.
-    /// Parse with `serde_json`.
+    /// Parse with `serde_json` — or use [`Self::elements_at`] for the typed
+    /// equivalent.
     ///
     /// Returns `"{}"` if no document is loaded (Verovio's score-walk would
     /// otherwise assert).
