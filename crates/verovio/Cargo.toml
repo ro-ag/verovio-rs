@@ -17,6 +17,13 @@ readme = "../../README.md"
 sanitize = ["verovio-sys/sanitize"]
 sanitize-thread = ["verovio-sys/sanitize-thread"]
 
+# Rasterize a page's SVG to PNG bytes via `resvg`. Adds ~200 KB compiled
+# (resvg + usvg + tiny_skia + their deps). Pure Rust, no system libs.
+png = ["dep:resvg"]
+# Convert a page's SVG to PDF bytes via `svg2pdf`. Adds `resvg` too
+# (svg2pdf builds on it) plus the PDF writer.
+pdf = ["dep:svg2pdf", "dep:resvg"]
+
 [dependencies]
 verovio-sys = { path = "../verovio-sys", version = "0.1.0" }
 verovio-data = { path = "../verovio-data", version = "0.1.0" }
@@ -27,6 +34,8 @@ serde_json.workspace = true
 base64.workspace = true
 midly.workspace = true
 roxmltree.workspace = true
+resvg = { workspace = true, optional = true }
+svg2pdf = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

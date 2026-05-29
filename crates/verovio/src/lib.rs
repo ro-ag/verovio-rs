@@ -50,6 +50,8 @@ mod error;
 mod log;
 pub mod lookup;
 pub mod midi;
+#[cfg(any(feature = "png", feature = "pdf"))]
+pub mod raster;
 mod toolkit;
 mod types;
 
