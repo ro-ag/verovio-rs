@@ -13,17 +13,14 @@ fn main() {
     }
 
     // Verovio's src/vrv.cpp does `#include "git_commit.h"` on non-Windows non-
-    // CocoaPods non-SwiftPackage builds. Upstream generates this header via
-    // `tools/get_git_commit.sh` during cmake configure; since we drive the
-    // build via cc::Build instead of cmake, we generate it ourselves into
-    // OUT_DIR (and put OUT_DIR ahead of Verovio's include/vrv on the search
-    // path, so a stale copy in the submodule tree never wins).
+    // CocoaPods non-SwiftPackage builds. Upstream's `tools/get_git_commit.sh`
+    // writes a header that appends `-<short-sha>` to `Toolkit::GetVersion()`;
+    // since we pin Verovio by tag, the hash adds no information for our
+    // users — leaving GIT_COMMIT empty makes `tk.version()` return a clean
+    // `"6.2.1"` instead of `"6.2.1[verovio-rs]"` or `"6.2.1-8d42439dc"`.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    std::fs::write(
-        out_dir.join("git_commit.h"),
-        "#define GIT_COMMIT \"[verovio-rs]\"\n",
-    )
-    .expect("write git_commit.h");
+    std::fs::write(out_dir.join("git_commit.h"), "#define GIT_COMMIT \"\"\n")
+        .expect("write git_commit.h");
 
     // The include layout mirrors Verovio's own cmake/CMakeLists.txt — every
     // vendored dep sits in its own subdir under include/ and is referenced

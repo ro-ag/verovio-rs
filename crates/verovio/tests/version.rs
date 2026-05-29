@@ -21,3 +21,21 @@ fn version_matches_pinned_tag() {
         "expected pinned Verovio 6.2.x, got {v:?}"
     );
 }
+
+#[test]
+fn version_has_no_synthetic_git_commit_suffix() {
+    // We synthesize an empty `git_commit.h` in verovio-sys/build.rs so the
+    // upstream `GetVersion` returns just the pinned tag — no "[verovio-rs]"
+    // marker, no "-<sha>" hash. Catches a regression where the build script
+    // re-introduces the suffix.
+    let tk = Toolkit::new();
+    let v = tk.version();
+    assert!(
+        !v.contains('['),
+        "version should not carry a [verovio-rs] marker; got {v:?}"
+    );
+    assert!(
+        !v.contains('-'),
+        "version should not carry a git-hash suffix; got {v:?}"
+    );
+}
