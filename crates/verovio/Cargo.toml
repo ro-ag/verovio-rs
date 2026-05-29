@@ -7,6 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[features]
+# Forward sanitizer features to verovio-sys so a workspace-level
+# `cargo test -p verovio --features sanitize` actually instruments the C++.
+sanitize = ["verovio-sys/sanitize"]
+sanitize-thread = ["verovio-sys/sanitize-thread"]
 
 [dependencies]
 verovio-sys = { path = "../verovio-sys", version = "0.1.0" }

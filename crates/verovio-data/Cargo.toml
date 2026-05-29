@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories = ["multimedia"]
+readme = "../../README.md"
 
 [dependencies]
 include_dir.workspace = true

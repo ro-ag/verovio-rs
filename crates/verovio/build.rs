@@ -7,6 +7,20 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Forward verovio-sys's sanitizer mode to this crate's test binaries.
+    // `cargo:rustc-link-arg` from a -sys build.rs only applies to its own
+    // targets; the safe-wrapper crate has to re-emit for its own.
+    match std::env::var("DEP_VEROVIO_SANITIZER").as_deref() {
+        Ok("address") => {
+            println!("cargo:rustc-link-arg=-fsanitize=address");
+            println!("cargo:rustc-link-arg=-fsanitize=undefined");
+        }
+        Ok("thread") => {
+            println!("cargo:rustc-link-arg=-fsanitize=thread");
+        }
+        _ => {}
+    }
+
     if !cfg!(target_os = "linux") {
         return;
     }

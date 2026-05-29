@@ -44,6 +44,26 @@ fn main() {
         manifest_dir.join("include"),
     ];
 
+    // Sanitizer feature gates. These are mutually exclusive — ASan and TSan
+    // share runtime state in libsanitizer and can't be linked together.
+    let asan = std::env::var_os("CARGO_FEATURE_SANITIZE").is_some();
+    let tsan = std::env::var_os("CARGO_FEATURE_SANITIZE_THREAD").is_some();
+    assert!(
+        !(asan && tsan),
+        "verovio-sys: `sanitize` and `sanitize-thread` features are mutually exclusive"
+    );
+    let sanitizer_flags: Vec<&str> = if asan {
+        vec![
+            "-fsanitize=address",
+            "-fsanitize=undefined",
+            "-fno-omit-frame-pointer",
+        ]
+    } else if tsan {
+        vec!["-fsanitize=thread", "-fno-omit-frame-pointer"]
+    } else {
+        vec![]
+    };
+
     // Compile Verovio + libmei into a single static archive. We skip
     // tools/c_wrapper.cpp deliberately: we bridge to the C++ Toolkit directly
     // via cxx, and the C wrapper isn't part of our linkage path.
@@ -54,6 +74,9 @@ fn main() {
         .warnings(false) // upstream Verovio has unused-parameter warnings; not ours to fix
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fvisibility-inlines-hidden");
+    for f in &sanitizer_flags {
+        verovio_build.flag(f);
+    }
 
     for dir in &include_dirs {
         verovio_build.include(dir);
@@ -83,7 +106,31 @@ fn main() {
     for dir in &include_dirs {
         bridge_build.include(dir);
     }
+    for f in &sanitizer_flags {
+        bridge_build.flag(f);
+    }
     bridge_build.compile("verovio_bridge");
+
+    // Emit sanitizer link args for verovio-sys's own benchmarks/binaries
+    // /tests. The verovio crate's build.rs re-emits the same flags for the
+    // downstream targets (`cargo:rustc-link-arg` is per-package).
+    for f in &sanitizer_flags {
+        // -fno-omit-frame-pointer is a compile-only flag; skip at link.
+        if f.starts_with("-fsanitize=") {
+            println!("cargo:rustc-link-arg={f}");
+        }
+    }
+
+    // Publish the active sanitizer mode to downstream build scripts via
+    // the `links=verovio` metadata channel (DEP_VEROVIO_SANITIZER).
+    let sanitizer_mode = if asan {
+        "address"
+    } else if tsan {
+        "thread"
+    } else {
+        "none"
+    };
+    println!("cargo:sanitizer={sanitizer_mode}");
 
     // C++ runtime.
     if cfg!(target_os = "macos") {

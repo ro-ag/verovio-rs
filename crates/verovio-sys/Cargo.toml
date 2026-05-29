@@ -7,7 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+keywords.workspace = true
+categories = ["external-ffi-bindings", "multimedia"]
+readme = "../../README.md"
 links = "verovio"
+
+[features]
+# Build Verovio + the cxx bridge with AddressSanitizer + UBSan + LeakSan
+# (LSan rides with ASan). Linker flags are emitted for verovio-sys's own
+# benchmarks/binaries/tests; the verovio safe-wrapper crate forwards via
+# its own build.rs for downstream targets.
+sanitize = []
+# Build with ThreadSanitizer instead. Mutually exclusive with `sanitize`
+# (ASan and TSan cannot coexist) — `build.rs` panics if both are enabled.
+sanitize-thread = []
 
 [dependencies]
 cxx.workspace = true
