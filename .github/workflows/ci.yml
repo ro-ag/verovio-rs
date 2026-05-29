@@ -49,3 +49,35 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --verbose
+
+  test-nix:
+    name: test (nix-shell — dev env fidelity)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nix-shell
+
+      - name: cargo fmt --check
+        run: nix-shell --run "cargo fmt --all --check"
+
+      - name: cargo clippy
+        run: nix-shell --run "cargo clippy --workspace --all-targets"
+
+      - name: cargo build
+        run: nix-shell --run "cargo build --workspace --all-targets --verbose"
+
+      - name: cargo test
+        run: nix-shell --run "cargo test --workspace --verbose"
