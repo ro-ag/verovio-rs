@@ -9,6 +9,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Route rustc + cc through sccache so the ~300 cpp files in Verovio reuse
+  # prior compile results across CI runs (mozilla-actions/sccache-action sets
+  # the cache backend to the GitHub Actions cache).
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  CC: sccache cc
+  CXX: sccache c++
 
 jobs:
   test:
@@ -30,13 +37,23 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Caches the cargo registry, git deps, and target/{debug,release}/build
-      # fingerprints. The heavy artifact (libverovio.a, ~300 MB debug) is NOT
-      # cached by default — first build on a fresh runner takes ~5-6 min.
+      # Cargo registry + git deps + target fingerprints. Doesn't include the
+      # heavy libverovio.a artifact — that's what sccache is for.
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.os }}
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Install mold (Linux only)
+        if: runner.os == 'Linux'
+        uses: rui314/setup-mold@v1
+
+      - name: Use mold as Rust linker (Linux only)
+        if: runner.os == 'Linux'
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -49,6 +66,10 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --verbose
+
+      - name: sccache stats
+        run: sccache --show-stats
+        if: always()
 
   test-nix:
     name: test (nix-shell — dev env fidelity)
@@ -70,14 +91,21 @@ jobs:
         with:
           shared-key: nix-shell
 
+      # sccache + mold come from shell.nix; the wrapper env vars are set
+      # there too. We pass SCCACHE_GHA_ENABLED through so the cache is
+      # routed to GitHub Actions storage in this CI context.
       - name: cargo fmt --check
-        run: nix-shell --run "cargo fmt --all --check"
+        run: nix-shell --run "SCCACHE_GHA_ENABLED=true cargo fmt --all --check"
 
       - name: cargo clippy
-        run: nix-shell --run "cargo clippy --workspace --all-targets"
+        run: nix-shell --run "SCCACHE_GHA_ENABLED=true cargo clippy --workspace --all-targets"
 
       - name: cargo build
-        run: nix-shell --run "cargo build --workspace --all-targets --verbose"
+        run: nix-shell --run "SCCACHE_GHA_ENABLED=true cargo build --workspace --all-targets --verbose"
 
       - name: cargo test
-        run: nix-shell --run "cargo test --workspace --verbose"
+        run: nix-shell --run "SCCACHE_GHA_ENABLED=true cargo test --workspace --verbose"
+
+      - name: sccache stats
+        run: nix-shell --run "sccache --show-stats"
+        if: always()
