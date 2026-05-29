@@ -48,6 +48,7 @@
 
 mod error;
 mod log;
+pub mod lookup;
 mod toolkit;
 mod types;
 

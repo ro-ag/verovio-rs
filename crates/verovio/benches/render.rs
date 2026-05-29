@@ -95,5 +95,46 @@ fn bench_parse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_svg, bench_multi_page_svg, bench_parse);
+fn bench_lookup(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lookup");
+
+    // Build a cached timemap once.
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("PAE load");
+    let timemap = tk.timemap().expect("timemap parse");
+
+    // Cache-aware lookup: pure-Rust walk over the parsed timemap.
+    group.bench_function("sounding_at (cached lookup, 1-bar PAE, t=250ms)", |b| {
+        b.iter(|| {
+            let _ = verovio::lookup::sounding_at(&timemap, 250.0);
+        })
+    });
+
+    // Buffer-reuse variant — same work, no per-call Vec alloc.
+    let mut buf = Vec::with_capacity(16);
+    group.bench_function("sounding_at_into (cached lookup, reuse buf)", |b| {
+        b.iter(|| {
+            verovio::lookup::sounding_at_into(&timemap, 250.0, &mut buf);
+        })
+    });
+
+    // The FFI + JSON path for the same answer. This is what the cache
+    // replaces. Expect 10-100× slower on a tiny score; the gap widens
+    // for larger scores because FFI cost is fixed per call.
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("PAE load");
+    group.bench_function("Toolkit::elements_at_time (FFI + JSON, t=250ms)", |b| {
+        b.iter(|| {
+            let _ = tk.elements_at_time(250);
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_svg,
+    bench_multi_page_svg,
+    bench_parse,
+    bench_lookup
+);
 criterion_main!(benches);
