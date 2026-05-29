@@ -19,6 +19,124 @@ use serde::{Deserialize, Serialize};
 /// one. The shape matches upstream `vrv::ExpansionMap::ToJson`.
 pub type ExpansionMap = BTreeMap<String, Vec<String>>;
 
+/// A single tempo change in a score: "from this quarter-beat onward, the
+/// tempo is `bpm`."
+#[derive(Debug, Clone, PartialEq)]
+pub struct TempoChange {
+    /// Quarter-note position where this tempo takes effect.
+    pub at_qstamp: f64,
+    /// Tempo in beats per minute, effective from `at_qstamp` until the
+    /// next [`TempoChange`] in the parent [`TempoMap`].
+    pub bpm: f64,
+}
+
+/// Ordered tempo changes through a score. Use
+/// [`Toolkit::tempo_map`](crate::Toolkit::tempo_map) (or
+/// [`TempoMap::from_timemap`]) to build one, then [`Self::qstamp_to_ms`] /
+/// [`Self::ms_to_qstamp`] to convert between musical and wall-clock
+/// positions under tempo changes.
+///
+/// This is the primitive consumers need when:
+/// - **Driving playback under tempo overrides** — slow down for practice
+///   by passing a modified `TempoMap` to your scheduler.
+/// - **Converting `qfrac`-exact positions to wall-clock ms** without
+///   suffering Verovio's f64 `tstamp` rounding.
+/// - **Pre-computing per-tick wall-clock times** ahead of an audio loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TempoMap {
+    /// Sorted by `at_qstamp` ascending. The first change is at `qstamp=0`
+    /// when extracted from a Verovio timemap (Verovio always publishes
+    /// tempo on its first event).
+    pub changes: Vec<TempoChange>,
+}
+
+impl TempoMap {
+    /// Extract tempo changes from a parsed timemap. Returns `None` for an
+    /// empty timemap or one without any tempo info on its first event.
+    pub fn from_timemap(timemap: &[TimemapEvent]) -> Option<Self> {
+        let first = timemap.first()?;
+        let initial_bpm = first.tempo?;
+        let mut changes = vec![TempoChange {
+            at_qstamp: first.qstamp,
+            bpm: initial_bpm,
+        }];
+        let mut last_bpm = initial_bpm;
+        for ev in timemap.iter().skip(1) {
+            if let Some(bpm) = ev.tempo {
+                if (bpm - last_bpm).abs() > f64::EPSILON {
+                    changes.push(TempoChange {
+                        at_qstamp: ev.qstamp,
+                        bpm,
+                    });
+                    last_bpm = bpm;
+                }
+            }
+        }
+        Some(Self { changes })
+    }
+
+    /// Construct from an explicit sequence of `(qstamp, bpm)` pairs. The
+    /// caller is responsible for ensuring `at_qstamp` is non-decreasing.
+    pub fn new(changes: Vec<TempoChange>) -> Self {
+        Self { changes }
+    }
+
+    /// Convert a quarter-beat position to wall-clock milliseconds under
+    /// this tempo map. Handles tempo changes correctly: each segment
+    /// contributes `(q_end - q_start) * 60_000 / bpm` ms.
+    pub fn qstamp_to_ms(&self, qstamp: f64) -> f64 {
+        if qstamp <= 0.0 || self.changes.is_empty() {
+            return 0.0;
+        }
+        let mut ms = 0.0;
+        for i in 0..self.changes.len() {
+            let q_start = self.changes[i].at_qstamp;
+            let bpm = self.changes[i].bpm;
+            let q_end = self
+                .changes
+                .get(i + 1)
+                .map(|c| c.at_qstamp)
+                .unwrap_or(f64::INFINITY);
+            let segment_end = q_end.min(qstamp);
+            if segment_end > q_start {
+                ms += (segment_end - q_start) * 60_000.0 / bpm;
+            }
+            if segment_end >= qstamp {
+                return ms;
+            }
+        }
+        ms
+    }
+
+    /// Convert wall-clock milliseconds to a quarter-beat position — the
+    /// inverse of [`Self::qstamp_to_ms`].
+    pub fn ms_to_qstamp(&self, ms: f64) -> f64 {
+        if ms <= 0.0 || self.changes.is_empty() {
+            return 0.0;
+        }
+        let mut accumulated_ms = 0.0;
+        let mut last_q = self.changes[0].at_qstamp;
+        for i in 0..self.changes.len() {
+            let q_start = self.changes[i].at_qstamp;
+            let bpm = self.changes[i].bpm;
+            let q_end = self
+                .changes
+                .get(i + 1)
+                .map(|c| c.at_qstamp)
+                .unwrap_or(f64::INFINITY);
+            let segment_q_duration = q_end - q_start;
+            let segment_ms_duration = segment_q_duration * 60_000.0 / bpm;
+            if accumulated_ms + segment_ms_duration >= ms {
+                let elapsed_in_segment_ms = ms - accumulated_ms;
+                return q_start + elapsed_in_segment_ms / 60_000.0 * bpm;
+            }
+            accumulated_ms += segment_ms_duration;
+            last_q = q_end;
+        }
+        last_q
+    }
+}
+
 /// One row of the playback timemap: a moment where elements turn on or off.
 ///
 /// `tstamp` is in **milliseconds**; `qstamp` is in **quarter-note beats**.

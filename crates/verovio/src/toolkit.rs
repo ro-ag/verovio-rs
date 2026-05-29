@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use cxx::UniquePtr;
 use verovio_sys::ffi;
 
-use crate::{ElementsAtTime, Error, ExpansionMap, Result, Timemap, TimemapEventExact};
+use crate::{ElementsAtTime, Error, ExpansionMap, Result, TempoMap, Timemap, TimemapEventExact};
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
 /// the first time the toolkit is constructed; reuse on subsequent calls.
@@ -352,6 +352,22 @@ impl Toolkit {
     pub fn expansion_map(&mut self) -> Result<ExpansionMap> {
         let json = self.render_to_expansion_map()?;
         Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Extract the tempo changes from the document as a [`TempoMap`] — the
+    /// primitive xpart needs to drive playback under arbitrary tempo
+    /// overrides (slow practice mode, click-track sync, etc.).
+    ///
+    /// Equivalent to `TempoMap::from_timemap(&self.timemap()?)` — provided
+    /// here for the common case of "give me the tempo info now". For
+    /// programs that already cache `timemap()`, calling
+    /// `TempoMap::from_timemap(&cached)` is one fewer FFI crossing.
+    ///
+    /// Returns `None` if the timemap is empty or its first event has no
+    /// tempo info (Verovio normally always publishes tempo first).
+    pub fn tempo_map(&mut self) -> Result<Option<TempoMap>> {
+        let tm = self.timemap()?;
+        Ok(TempoMap::from_timemap(&tm))
     }
 
     /// Render the timemap with maximum precision: exact rational quarter-note
