@@ -50,4 +50,8 @@ rust::String get_elements_at_time(vrv::Toolkit &tk, int32_t millisec) {
     return rust::String(tk.GetElementsAtTime(millisec));
 }
 
+void enable_log(int32_t level) {
+    vrv::EnableLog(static_cast<vrv::LogLevel>(level));
+}
+
 } // namespace vrv_rs

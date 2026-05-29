@@ -35,5 +35,10 @@ pub mod ffi {
         fn render_to_timemap(tk: Pin<&mut Toolkit>, json_options: &str) -> String;
         fn redo_layout(tk: Pin<&mut Toolkit>, json_options: &str);
         fn get_elements_at_time(tk: Pin<&mut Toolkit>, millisec: i32) -> String;
+
+        // Process-global log threshold. Gated behind a Mutex in the safe
+        // wrapper so concurrent toolkit users don't race on Verovio's
+        // namespace-level `vrv::logLevel`.
+        fn enable_log(level: i32);
     }
 }

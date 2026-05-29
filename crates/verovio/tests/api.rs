@@ -1,4 +1,4 @@
-use verovio::{Error, Toolkit};
+use verovio::{Error, LogLevel, Toolkit};
 
 // A known-good Plaine & Easie sample, copied from Verovio's own test fixtures
 // (`doc/tests/pae/4_duration/05_dur-4th.pae`). Verovio auto-detects format
@@ -119,6 +119,22 @@ fn page_count_after_load_is_at_least_one() {
     let pages = tk.page_count();
     assert!(pages >= 1, "expected at least one page, got {pages}");
     assert!(pages <= 1000, "page_count returned absurd value: {pages}");
+}
+
+#[test]
+fn set_log_level_off_silences_subsequent_calls() {
+    // Cannot easily intercept Verovio's stdout from the test harness, so
+    // assert only that the API call is reachable and doesn't panic /
+    // poison the internal mutex. Manual inspection of test output shows
+    // the `[Warning]` chatter from render-out-of-range tests goes away
+    // when this is wired in at process start.
+    verovio::set_log_level(LogLevel::Off);
+    let mut tk = Toolkit::new();
+    tk.load_data(SAMPLE_PAE).unwrap();
+    let _ = tk.render_to_svg(1).unwrap();
+
+    // Restore default so concurrent tests in the same process see warnings.
+    verovio::set_log_level(LogLevel::Warning);
 }
 
 // Compile-time assertion: Toolkit is `Send`. The bound is part of the public

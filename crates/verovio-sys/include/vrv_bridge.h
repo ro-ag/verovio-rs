@@ -31,4 +31,9 @@ void redo_layout(vrv::Toolkit &tk, rust::Str json_options);
 
 rust::String get_elements_at_time(vrv::Toolkit &tk, int32_t millisec);
 
+// Process-global log control. Verovio's log threshold lives in a
+// namespace-level variable (`vrv::logLevel`); the safe-wrapper crate
+// gates this behind a Mutex so concurrent toolkits don't race on it.
+void enable_log(int32_t level);
+
 } // namespace vrv_rs
