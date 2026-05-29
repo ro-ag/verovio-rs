@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use cxx::UniquePtr;
 use verovio_sys::ffi;
 
-use crate::{ElementsAtTime, Error, Result, Timemap};
+use crate::{ElementsAtTime, Error, Result, Timemap, TimemapEventExact};
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
 /// the first time the toolkit is constructed; reuse on subsequent calls.
@@ -271,6 +271,30 @@ impl Toolkit {
         Ok(())
     }
 
+    /// Render the timemap with explicit upstream options applied. `json_options`
+    /// is the same JSON document Verovio's `Toolkit::RenderToTimemap` accepts —
+    /// notably:
+    ///
+    /// | Option            | Type | Effect                                                |
+    /// |-------------------|------|-------------------------------------------------------|
+    /// | `useFractions`    | bool | Emit `tstamp` / `qstamp` as exact `[num, den]` pairs  |
+    /// |                   |      | instead of f64 milliseconds — see [`Self::timemap_exact`] |
+    /// | `includeRests`    | bool | Add `restsOn` / `restsOff` arrays to each event       |
+    /// | `includeMeasures` | bool | Add `measureOn` (MEI ID) when crossing a barline      |
+    ///
+    /// Returns [`Error::RenderFailed`] if no document is loaded.
+    pub fn render_to_timemap_with_options(&mut self, json_options: &str) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let json = ffi::render_to_timemap(self.inner.pin_mut(), json_options);
+        if json.is_empty() {
+            Err(Error::RenderFailed { page: 0 })
+        } else {
+            Ok(json)
+        }
+    }
+
     /// Force a layout pass on the currently-loaded document.
     ///
     /// Layout happens lazily on the first render call; explicit
@@ -288,8 +312,34 @@ impl Toolkit {
     /// Render the timemap parsed into typed [`TimemapEvent`](crate::TimemapEvent)s
     /// — the form `xpart` actually consumes. See [`Self::render_to_timemap`]
     /// for the raw JSON-string variant.
+    ///
+    /// **Hot-path note:** call this *once per loaded document* and walk the
+    /// returned `Vec` directly in your playback loop. Re-calling on every
+    /// frame re-traverses the FFI boundary and re-parses JSON — that's the
+    /// ~22 µs/call benched. The vector itself is cheap to walk
+    /// (sorted by `tstamp` upstream, so a `partition_point` binary search is
+    /// O(log n) for "what's active at time t").
     pub fn timemap(&mut self) -> Result<Timemap> {
         let json = self.render_to_timemap()?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Render the timemap with maximum precision: exact rational quarter-note
+    /// timestamps (`qfrac: [num, den]`), rest events, and measure markers all
+    /// included. Equivalent to calling
+    /// [`Self::render_to_timemap_with_options`] with
+    /// `{"useFractions": true, "includeRests": true, "includeMeasures": true}`
+    /// then parsing into [`TimemapEventExact`].
+    ///
+    /// Use this when you care about accumulated precision (long scores, tight
+    /// rhythmic detail like tuplets at fast tempos) — `qfrac` is exact and
+    /// never drifts, unlike the f64 `tstamp` in [`Self::timemap`].
+    ///
+    /// Same hot-path advice applies: call once, walk locally.
+    pub fn timemap_exact(&mut self) -> Result<Vec<TimemapEventExact>> {
+        let json = self.render_to_timemap_with_options(
+            r#"{"useFractions": true, "includeRests": true, "includeMeasures": true}"#,
+        )?;
         Ok(serde_json::from_str(&json)?)
     }
 

@@ -75,6 +75,75 @@ fn elements_at_empty_doc_returns_default() {
 }
 
 #[test]
+fn timemap_exact_returns_rational_quarter_beats() {
+    let mut tk = loaded();
+    let events = tk.timemap_exact().expect("exact timemap");
+    assert!(!events.is_empty());
+
+    // First event is at the start, qfrac == 0/1.
+    assert_eq!(events[0].qfrac, [0, 1]);
+
+    // Every qfrac denominator must be positive (otherwise the fraction is
+    // ill-formed — Verovio shouldn't ever emit den=0, but pin it).
+    for ev in &events {
+        assert!(ev.qfrac[1] > 0, "denominator must be positive: {ev:?}");
+    }
+}
+
+#[test]
+fn timemap_exact_includes_rest_and_measure_markers() {
+    let mut tk = loaded();
+    let events = tk.timemap_exact().expect("exact timemap");
+
+    // Verovio's `includeMeasures` option is on by default in timemap_exact —
+    // at least one event in the one-bar fixture should carry the enclosing
+    // measure ID (the first event always does).
+    assert!(
+        events.iter().any(|ev| ev.measure_on.is_some()),
+        "expected at least one measureOn event in timemap_exact"
+    );
+
+    // The fixture's PAE `'4G/4-` is quarter-G followed by a quarter rest.
+    // With `includeRests` on, the rest should turn on at q=1/1 and off at q=2/1.
+    let rest_on_event = events
+        .iter()
+        .find(|ev| !ev.rests_on.is_empty())
+        .expect("expected a rest-on event in the one-bar PAE");
+    assert_eq!(rest_on_event.qfrac, [1, 1], "rest should turn on at q=1");
+}
+
+#[test]
+fn quarter_beats_helper_returns_canonical_pair() {
+    let mut tk = loaded();
+    let events = tk.timemap_exact().expect("exact timemap");
+
+    for ev in &events {
+        let (num, den) = ev.quarter_beats();
+        assert_eq!(num, ev.qfrac[0]);
+        assert_eq!(den, ev.qfrac[1]);
+    }
+}
+
+#[test]
+fn tstamp_ms_at_tempo_matches_verovios_tstamp_at_published_tempo() {
+    let mut tk = loaded();
+    let events = tk.timemap_exact().expect("exact timemap");
+    // The first event publishes the tempo (120 BPM for our fixture).
+    let bpm = events[0].tempo.expect("first event should publish tempo");
+    for ev in &events {
+        let computed_ms = ev.tstamp_ms_at_tempo(bpm);
+        let upstream_ms = ev.tstamp;
+        // Verovio rounds tstamp to the nearest f64 ms; our helper is the
+        // raw f64 arithmetic, so they should agree to within 1 µs.
+        assert!(
+            (computed_ms - upstream_ms).abs() < 1e-3,
+            "computed {computed_ms} vs upstream {upstream_ms} at q={:?}",
+            ev.qfrac,
+        );
+    }
+}
+
+#[test]
 fn timemap_round_trips_through_serde() {
     let mut tk = loaded();
     let original = tk.timemap().unwrap();

@@ -58,3 +58,76 @@ pub struct ElementsAtTime {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rests: Vec<String>,
 }
+
+/// Higher-precision timemap event — quarter-note position as an **exact
+/// rational** instead of an f64 millisecond, with optional rest and measure
+/// markers turned on.
+///
+/// Returned by [`Toolkit::timemap_exact`](crate::Toolkit::timemap_exact).
+/// Use this when you care about accumulated precision (long scores, tight
+/// rhythmic detail like tuplets at fast tempos) — the f64 `tstamp` in
+/// [`TimemapEvent`] is fine for casual playback but Verovio computes it
+/// from `qfrac × 60_000 / tempo` and float rounding can drift over time.
+///
+/// The `qfrac` pair never drifts: `[3, 2]` is exactly 1.5 quarter beats
+/// regardless of how it's transported.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct TimemapEventExact {
+    /// Quarter-note timestamp as `[numerator, denominator]`. Always reduced
+    /// (denominator > 0). E.g. `[3, 2]` is 1.5 quarter beats from the start
+    /// of playback.
+    pub qfrac: [i64; 2],
+
+    /// Verovio's f64 millisecond timestamp, computed as
+    /// `(qfrac.0 / qfrac.1) × 60_000 / tempo`. Exact for simple ratios and
+    /// integer tempos; may carry float rounding for irregular ratios.
+    /// Recompute from your own tempo with [`Self::tstamp_ms_at_tempo`] if
+    /// you need it under a tempo map you control.
+    pub tstamp: f64,
+
+    /// Element IDs whose articulations begin at this moment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on: Vec<String>,
+
+    /// Element IDs whose articulations end at this moment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub off: Vec<String>,
+
+    /// Rest element IDs beginning at this moment. Populated when Verovio's
+    /// `includeRests` option is set (which [`Toolkit::timemap_exact`] does
+    /// automatically).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "restsOn")]
+    pub rests_on: Vec<String>,
+
+    /// Rest element IDs ending at this moment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "restsOff")]
+    pub rests_off: Vec<String>,
+
+    /// Enclosing measure ID when this event marks a barline crossing.
+    /// Populated when Verovio's `includeMeasures` option is set.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "measureOn")]
+    pub measure_on: Option<String>,
+
+    /// Tempo (BPM) effective from this event onward, when Verovio publishes
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tempo: Option<f64>,
+}
+
+impl TimemapEventExact {
+    /// Returns the quarter-note position as an exact `(numerator, denominator)`
+    /// pair, for callers that want to do rational arithmetic in their own
+    /// numeric type (`num-rational`, `fraction`, hand-rolled, …).
+    pub fn quarter_beats(&self) -> (i64, i64) {
+        (self.qfrac[0], self.qfrac[1])
+    }
+
+    /// Compute the wall-clock ms for this event under an arbitrary tempo
+    /// (BPM). Uses f64 arithmetic — `(qfrac.0 / qfrac.1) × 60_000 / bpm`.
+    /// For sub-millisecond playback timing you'd want bigint or
+    /// `num-rational` instead; this helper is the practical answer for
+    /// `Duration::from_secs_f64` style scheduling.
+    pub fn tstamp_ms_at_tempo(&self, bpm: f64) -> f64 {
+        (self.qfrac[0] as f64 / self.qfrac[1] as f64) * 60_000.0 / bpm
+    }
+}
