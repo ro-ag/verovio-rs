@@ -76,3 +76,36 @@ const _: fn() = || {
     fn assert_send<T: Send>() {}
     assert_send::<Toolkit>();
 };
+
+/// Runtime smoke test for the `Send + !Sync` claim: spin up another toolkit
+/// on a separate thread while a primary toolkit runs on this thread. If
+/// Verovio's process-global state (m_humdrumBuffer, log buffer, locale) leaked
+/// into our exposed surface, this would race or deadlock. We deliberately
+/// avoid touching any of those — no Humdrum methods, no `GetLog`, no
+/// `SetLocale` — so this stays well-defined.
+#[test]
+fn two_toolkits_in_parallel_threads_each_render_independently() {
+    const SAMPLE: &str = "\
+@start:t
+@clef:G-2
+@keysig:xF
+@key:
+@timesig:
+@data:'4G/4-
+@end:t
+";
+
+    let handle = std::thread::spawn(|| {
+        let mut tk = Toolkit::new();
+        tk.load_data(SAMPLE).unwrap();
+        let svg = tk.render_to_svg(1).unwrap();
+        assert!(svg.contains("<svg"));
+    });
+
+    let mut tk = Toolkit::new();
+    tk.load_data(SAMPLE).unwrap();
+    let svg = tk.render_to_svg(1).unwrap();
+    assert!(svg.contains("<svg"));
+
+    handle.join().expect("parallel toolkit thread panicked");
+}
