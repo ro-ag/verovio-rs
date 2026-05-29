@@ -14,8 +14,8 @@ use cxx::UniquePtr;
 use verovio_sys::ffi;
 
 use crate::{
-    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MidiOptions, Result,
-    SvgOptions, TempoMap, Timemap, TimemapEventExact,
+    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MeasureInfo, MidiOptions,
+    Result, SvgOptions, TempoMap, Timemap, TimemapEventExact,
 };
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
@@ -136,6 +136,13 @@ impl Toolkit {
     pub fn page_count(&mut self) -> u32 {
         let n = ffi::page_count(self.inner.pin_mut());
         n.max(0) as u32
+    }
+
+    /// Whether a document is currently loaded and laid out. Implemented as
+    /// `page_count() > 0` — semantic predicate so consumers don't have to
+    /// reach for the underlying number to express the same intent.
+    pub fn is_loaded(&mut self) -> bool {
+        self.page_count() > 0
     }
 
     /// Current option set as a JSON document.
@@ -486,6 +493,33 @@ impl Toolkit {
             }
         }
         Ok(out)
+    }
+
+    /// Extract the measure-level timeline as `Vec<MeasureInfo>` — for each
+    /// measure, its MEI ID plus the wall-clock and quarter-beat range it
+    /// covers. Powers "Measure N" displays and measure-based loop / seek
+    /// UIs in playback consumers.
+    ///
+    /// Equivalent to
+    /// `crate::lookup::measures_from_events(&self.timemap_exact()?)` —
+    /// provided here for the common one-shot case. Programs that already
+    /// cache `timemap_exact()` should call the pure
+    /// [`crate::lookup::measures_from_events`] instead.
+    pub fn measures(&mut self) -> Result<Vec<MeasureInfo>> {
+        let events = self.timemap_exact()?;
+        Ok(crate::lookup::measures_from_events(&events))
+    }
+
+    /// MEI ID of the measure enclosing the given wall-clock ms. Returns
+    /// `None` if `ms` is before the first measure marker or no document
+    /// is loaded.
+    ///
+    /// One-shot convenience over [`crate::lookup::measure_at_in`] —
+    /// repeated calls re-render the timemap each time, so for tight
+    /// playback loops cache `timemap_exact()` and use the pure helper.
+    pub fn measure_at(&mut self, ms: f64) -> Result<Option<String>> {
+        let events = self.timemap_exact()?;
+        Ok(crate::lookup::measure_at_in(&events, ms).map(String::from))
     }
 
     /// Extract the tempo changes from the document as a [`TempoMap`] — the

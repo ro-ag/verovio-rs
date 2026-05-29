@@ -38,7 +38,56 @@
 
 use std::collections::BTreeSet;
 
-use crate::TimemapEvent;
+use crate::{MeasureInfo, TimemapEvent, TimemapEventExact};
+
+/// Find the measure ID enclosing `ms` in a cached exact-timemap. Returns
+/// the most recent `measure_on` whose `tstamp <= ms`, or `None` if the
+/// time is before the first measure marker.
+///
+/// O(events ≤ ms). For the common "what measure am I in" UI query at
+/// playback rate this is well under a microsecond.
+pub fn measure_at_in(events: &[TimemapEventExact], ms: f64) -> Option<&str> {
+    let mut current: Option<&str> = None;
+    for ev in events.iter().take_while(|e| e.tstamp <= ms) {
+        if let Some(m) = ev.measure_on.as_deref() {
+            current = Some(m);
+        }
+    }
+    current
+}
+
+/// Build the measure-level timeline from a cached exact-timemap.
+/// Walks every event whose `measure_on` field is set and produces one
+/// [`MeasureInfo`] per measure encountered. Each measure's `end_ms` /
+/// `end_qfrac` is the next measure's start, or the timemap's last event
+/// for the final measure.
+///
+/// Pairs with the upstream `includeMeasures` option that
+/// [`Toolkit::timemap_exact`](crate::Toolkit::timemap_exact) sets by
+/// default.
+pub fn measures_from_events(events: &[TimemapEventExact]) -> Vec<MeasureInfo> {
+    let mut measures: Vec<MeasureInfo> = Vec::new();
+    for ev in events {
+        if let Some(id) = &ev.measure_on {
+            if let Some(prev) = measures.last_mut() {
+                prev.end_ms = ev.tstamp;
+                prev.end_qfrac = ev.qfrac;
+            }
+            measures.push(MeasureInfo {
+                id: id.clone(),
+                start_ms: ev.tstamp,
+                end_ms: ev.tstamp,
+                start_qfrac: ev.qfrac,
+                end_qfrac: ev.qfrac,
+            });
+        }
+    }
+    if let (Some(last_event), Some(last_measure)) = (events.last(), measures.last_mut()) {
+        last_measure.end_ms = last_event.tstamp;
+        last_measure.end_qfrac = last_event.qfrac;
+    }
+    measures
+}
 
 /// Return the element IDs sounding at playback time `ms`, computed from a
 /// cached timemap. Returns a sorted `Vec<String>` so consumers can do

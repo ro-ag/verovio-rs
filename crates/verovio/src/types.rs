@@ -65,6 +65,29 @@ impl Default for MidiOptions {
     }
 }
 
+/// Summary of one measure across the loaded score's timeline.
+///
+/// Build with [`Toolkit::measures`](crate::Toolkit::measures) or
+/// [`crate::lookup::measures_from_events`]. Used by player UIs that need
+/// to display "Measure N" indicators, support loop-region selection
+/// ("loop measures 4-8"), or seek by measure rather than by raw time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasureInfo {
+    /// MEI element ID of the measure.
+    pub id: String,
+    /// Wall-clock ms when this measure begins.
+    pub start_ms: f64,
+    /// Wall-clock ms when the next measure begins, or the timemap's last
+    /// tstamp for the final measure.
+    pub end_ms: f64,
+    /// Quarter-beat position where this measure begins, as exact rational
+    /// `[numerator, denominator]`.
+    pub start_qfrac: [i64; 2],
+    /// Quarter-beat position where the next measure begins (or the score's
+    /// end), as exact rational `[numerator, denominator]`.
+    pub end_qfrac: [i64; 2],
+}
+
 impl MidiOptions {
     /// Render to the JSON shape Verovio expects.
     pub(crate) fn to_json(&self) -> String {
