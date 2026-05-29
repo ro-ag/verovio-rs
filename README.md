@@ -79,6 +79,30 @@ nix-shell
 cargo test
 ```
 
+## Sanitizers
+
+Two cargo features instrument the C++ build for runtime sanitization:
+
+| Feature           | Adds to the C++ build                            |
+| ----------------- | ------------------------------------------------ |
+| `sanitize`        | `-fsanitize=address,undefined -fno-omit-frame-pointer` |
+| `sanitize-thread` | `-fsanitize=thread -fno-omit-frame-pointer`      |
+
+The two are mutually exclusive (libsanitizer runtimes can't coexist);
+`build.rs` panics if both are enabled.
+
+On stable Rust the default linker (`rust-lld`) doesn't translate
+`-fsanitize=…` into the matching runtime link. To run sanitizer tests
+locally, force `clang` as the linker driver:
+
+```sh
+RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld" \
+ASAN_OPTIONS="halt_on_error=1:abort_on_error=1:detect_leaks=0" \
+    cargo test --features verovio/sanitize
+```
+
+CI's `sanitize` job (ubuntu-latest) does the same automatically.
+
 ## Thread safety
 
 `Toolkit: Send + !Sync`. Verovio's render and layout methods mutate

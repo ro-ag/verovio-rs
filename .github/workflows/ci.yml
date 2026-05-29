@@ -121,18 +121,20 @@ jobs:
         with:
           shared-key: sanitize
 
-      - name: Install mold
-        uses: rui314/setup-mold@v1
-
-      - name: Use mold as Rust linker
-        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
-
-      # ASan typically reports "shadow memory range interleaves with an
-      # existing memory mapping" on aslr-enabled systems; disable per-test.
+      # Force clang as the linker driver: stable Rust defaults to rust-lld
+      # which doesn't translate `-fsanitize=address` into the ASan-runtime
+      # link (rustc-link-arg passes the flag through verbatim). clang's cc
+      # driver does, and it knows where its own libclang_rt.* lives.
+      # Skip mold here — mold and the cc-driver-managed sanitizer runtime
+      # don't combine cleanly; default ld is fast enough for one job.
       - name: cargo test (sanitize)
         env:
+          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=lld"
           # Make ASan failures fatal but readable; halt-on-error keeps the
           # first finding visible without a flood of follow-on noise.
+          # detect_leaks=0 because the verovio-data tempdir is deliberately
+          # leaked (process-lifetime) and would otherwise be a false-positive
+          # LSan report at process exit.
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: cargo test --workspace --features verovio/sanitize --verbose
