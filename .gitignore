@@ -1,0 +1,17 @@
+# Internal planning / session docs — not part of the public crate
+CLAUDE.md
+verovio-rs-kickoff.md
+.claude/
+AGENTS.md
+GEMINI.md
+
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
