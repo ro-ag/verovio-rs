@@ -13,8 +13,8 @@ use cxx::UniquePtr;
 use verovio_sys::ffi;
 
 use crate::{
-    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, Result, TempoMap,
-    Timemap, TimemapEventExact,
+    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MidiOptions, Result,
+    SvgOptions, TempoMap, Timemap, TimemapEventExact,
 };
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
@@ -146,6 +146,20 @@ impl Toolkit {
     /// option schema without mutating the toolkit.
     pub fn default_options(&self) -> String {
         ffi::get_default_options(&self.inner)
+    }
+
+    /// Apply MIDI-generation options via a typed wrapper. Convenience for
+    /// users who don't want to assemble the JSON themselves.
+    pub fn set_midi_options(&mut self, opts: &MidiOptions) -> Result<()> {
+        self.set_options(&opts.to_json())
+    }
+
+    /// Apply SVG-rendering options via a typed wrapper. The headline use
+    /// is [`SvgOptions::css`]: pass a CSS block and it'll be embedded
+    /// inside the rendered SVG. See [`SvgOptions`] for the targetable
+    /// class structure.
+    pub fn set_svg_options(&mut self, opts: &SvgOptions) -> Result<()> {
+        self.set_options(&opts.to_json())
     }
 
     /// Apply the given options. `json` is a JSON document; see

@@ -34,6 +34,121 @@ pub enum ElementKind {
 /// Pre-computed once per loaded document; lookup is O(1) `HashMap` access.
 pub type ClassifiedElements = HashMap<String, ElementKind>;
 
+/// Typed wrapper over the small subset of Verovio options that affect MIDI
+/// generation. Apply with
+/// [`Toolkit::set_midi_options`](crate::Toolkit::set_midi_options).
+///
+/// **What's NOT here:** per-staff instrument override, per-track mute, and
+/// per-track volume. Verovio's upstream MIDI surface doesn't expose those
+/// today; consumers needing them have to post-process the SMF emitted by
+/// [`Toolkit::render_to_midi_bytes`](crate::Toolkit::render_to_midi_bytes).
+/// See the `project-multi-track-timemap-gap` memory for the broader
+/// upstream-constraint context.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MidiOptions {
+    /// Multiplier applied to every tempo in the score before MIDI export.
+    /// `0.5` plays at half-speed (typical practice setting), `2.0` plays
+    /// at double-speed. Verovio's default is `1.0`.
+    pub tempo_adjustment: f64,
+
+    /// If `true`, omit cue-sized notes from the MIDI output. Maps to
+    /// `midiNoCue: true` in Verovio's options JSON. Default: `false`.
+    pub omit_cue_notes: bool,
+}
+
+impl Default for MidiOptions {
+    fn default() -> Self {
+        Self {
+            tempo_adjustment: 1.0,
+            omit_cue_notes: false,
+        }
+    }
+}
+
+impl MidiOptions {
+    /// Render to the JSON shape Verovio expects.
+    pub(crate) fn to_json(&self) -> String {
+        format!(
+            r#"{{"midiTempoAdjustment": {}, "midiNoCue": {}}}"#,
+            self.tempo_adjustment, self.omit_cue_notes
+        )
+    }
+}
+
+/// Typed wrapper over Verovio's SVG-output options. Apply with
+/// [`Toolkit::set_svg_options`](crate::Toolkit::set_svg_options).
+///
+/// # CSS targets in Verovio's rendered SVG
+///
+/// Verovio wraps every engraved element in a `<g>` with both an
+/// `id="MEI-element-id"` and a `class="kind"`. The class set you can
+/// reliably target includes: `note`, `notehead`, `stem`, `chord`,
+/// `rest`, `measure`, `staff`, `layer`, `beam`, `tie`, `slur`, `clef`,
+/// `keysig`, `metersig`, `barline`. Most elements compose: a note's
+/// notehead is `<g class="note">` ⊇ `<g class="notehead">`.
+///
+/// Use the [`Self::css`] field to inject a CSS block. Common recipes:
+///
+/// ```css
+/// /* page background */
+/// svg { background: #fafaf5; }
+/// /* default note color */
+/// g.note { fill: #14213d; }
+/// /* highlighting via a runtime-toggled class */
+/// g.note.playing { fill: #fca311; }
+/// /* faded measures */
+/// g.measure line { stroke: #999; }
+/// ```
+///
+/// For runtime highlighting, the consumer pattern is: bind a CSS class
+/// to a transient state (`.playing`, `.selected`) and toggle that class
+/// on the `<g>` element via the DOM. The SVG IDs match the MEI element
+/// IDs that [`Toolkit::timemap`](crate::Toolkit::timemap) and
+/// [`crate::lookup::sounding_at`] return.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SvgOptions {
+    /// CSS block embedded inside the rendered SVG. Empty by default.
+    /// Use the class/id targets documented on this struct.
+    pub css: String,
+    /// Overlay element bounding-box rectangles — useful for debugging
+    /// layout but visually noisy.
+    pub show_bounding_boxes: bool,
+    /// Overlay content-only bounding boxes (engraved content, not page
+    /// margins).
+    pub show_content_bounding_boxes: bool,
+    /// Emit minified SVG (no extra whitespace). Useful for serving over
+    /// a network where bytes matter.
+    pub format_raw: bool,
+    /// Emit HTML5-style SVG instead of XML-strict — relaxes some
+    /// namespace requirements for inline-in-HTML use.
+    pub html5: bool,
+    /// Drop the `xlink:` namespace prefix (Verovio uses it for `<use
+    /// xlink:href="…">` glyph references). Needed for some HTML5
+    /// embedding scenarios.
+    pub remove_xlink: bool,
+}
+
+impl SvgOptions {
+    /// Render to the JSON shape Verovio expects.
+    pub(crate) fn to_json(&self) -> String {
+        // `css` may contain quotes/backslashes — escape minimally.
+        let css_escaped = self
+            .css
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
+        format!(
+            r#"{{"svgCss": "{}", "svgBoundingBoxes": {}, "svgContentBoundingBoxes": {}, "svgFormatRaw": {}, "svgHtml5": {}, "svgRemoveXlink": {}}}"#,
+            css_escaped,
+            self.show_bounding_boxes,
+            self.show_content_bounding_boxes,
+            self.format_raw,
+            self.html5,
+            self.remove_xlink,
+        )
+    }
+}
+
 /// Expansion map: original MEI element ID → ordered list of expanded IDs
 /// as they appear in playback. An id that's played twice appears twice in
 /// the value array. Empty for scores without `<expansion>` markers.
