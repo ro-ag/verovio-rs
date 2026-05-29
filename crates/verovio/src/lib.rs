@@ -55,4 +55,4 @@ mod types;
 pub use error::{Error, Result};
 pub use log::{set_log_level, LogLevel};
 pub use toolkit::Toolkit;
-pub use types::{ElementsAtTime, Timemap, TimemapEvent, TimemapEventExact};
+pub use types::{ElementsAtTime, ExpansionMap, Timemap, TimemapEvent, TimemapEventExact};

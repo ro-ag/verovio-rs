@@ -7,7 +7,17 @@
 //! callers that want to forward the payload verbatim — e.g. across a web
 //! protocol that already does its own deserialization.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+/// Expansion map: original MEI element ID → ordered list of expanded IDs
+/// as they appear in playback. An id that's played twice appears twice in
+/// the value array. Empty for scores without `<expansion>` markers.
+///
+/// Use [`Toolkit::expansion_map`](crate::Toolkit::expansion_map) to obtain
+/// one. The shape matches upstream `vrv::ExpansionMap::ToJson`.
+pub type ExpansionMap = BTreeMap<String, Vec<String>>;
 
 /// One row of the playback timemap: a moment where elements turn on or off.
 ///

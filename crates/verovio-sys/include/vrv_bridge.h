@@ -27,6 +27,7 @@ bool set_options(vrv::Toolkit &tk, rust::Str options);
 rust::String render_to_svg(vrv::Toolkit &tk, int32_t page_no, bool xml_declaration);
 rust::String render_to_midi(vrv::Toolkit &tk); // base64-encoded MIDI
 rust::String render_to_timemap(vrv::Toolkit &tk, rust::Str json_options);
+rust::String render_to_expansion_map(vrv::Toolkit &tk);
 
 void redo_layout(vrv::Toolkit &tk, rust::Str json_options);
 

@@ -144,6 +144,36 @@ fn tstamp_ms_at_tempo_matches_verovios_tstamp_at_published_tempo() {
 }
 
 #[test]
+fn expansion_map_is_empty_for_score_without_repeats() {
+    let mut tk = loaded();
+    let expansion = tk.expansion_map().expect("expansion map parse");
+    // Our PAE fixture has no <expansion> markers, so Verovio's
+    // ExportExpansionMap returns "{}" — an empty BTreeMap.
+    assert!(
+        expansion.is_empty(),
+        "expected empty expansion map for repeat-free score, got {expansion:?}"
+    );
+}
+
+#[test]
+fn render_to_expansion_map_returns_json_object() {
+    let mut tk = loaded();
+    let json = tk.render_to_expansion_map().expect("expansion map render");
+    assert!(json.trim().starts_with('{'));
+    assert!(json.trim().ends_with('}'));
+}
+
+#[test]
+fn expansion_map_unloaded_doc_returns_err() {
+    let mut tk = verovio::Toolkit::new();
+    let res = tk.expansion_map();
+    assert!(
+        matches!(res, Err(verovio::Error::RenderFailed { page: 0 })),
+        "got {res:?}"
+    );
+}
+
+#[test]
 fn timemap_round_trips_through_serde() {
     let mut tk = loaded();
     let original = tk.timemap().unwrap();

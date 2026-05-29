@@ -34,6 +34,7 @@ pub mod ffi {
         fn render_to_svg(tk: Pin<&mut Toolkit>, page_no: i32, xml_declaration: bool) -> String;
         fn render_to_midi(tk: Pin<&mut Toolkit>) -> String;
         fn render_to_timemap(tk: Pin<&mut Toolkit>, json_options: &str) -> String;
+        fn render_to_expansion_map(tk: Pin<&mut Toolkit>) -> String;
         fn redo_layout(tk: Pin<&mut Toolkit>, json_options: &str);
         fn get_elements_at_time(tk: Pin<&mut Toolkit>, millisec: i32) -> String;
 

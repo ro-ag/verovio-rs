@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use cxx::UniquePtr;
 use verovio_sys::ffi;
 
-use crate::{ElementsAtTime, Error, Result, Timemap, TimemapEventExact};
+use crate::{ElementsAtTime, Error, ExpansionMap, Result, Timemap, TimemapEventExact};
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
 /// the first time the toolkit is constructed; reuse on subsequent calls.
@@ -321,6 +321,36 @@ impl Toolkit {
     /// O(log n) for "what's active at time t").
     pub fn timemap(&mut self) -> Result<Timemap> {
         let json = self.render_to_timemap()?;
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Render the document's expansion map as a JSON string.
+    ///
+    /// The expansion map encodes how MEI `<expansion>` markers (repeats,
+    /// segno/fine, voltas, …) unfold into a linear playback sequence. The
+    /// JSON shape is an object: `{ "originalId": ["expandedId1", ...], … }`
+    /// where each key is an MEI element ID (usually a `<measure>` ID) and
+    /// the value lists the IDs as they appear in playback order — so an
+    /// id that's played twice appears twice in the array.
+    ///
+    /// Returns `"{}"` if the loaded score has no expansion markers (most
+    /// short fixtures, all PAE/ABC). Returns
+    /// [`Error::RenderFailed`] for an unloaded toolkit (Verovio's
+    /// `SetMidiDoc` asserts otherwise).
+    pub fn render_to_expansion_map(&mut self) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let json = ffi::render_to_expansion_map(self.inner.pin_mut());
+        Ok(json)
+    }
+
+    /// Typed version of [`Self::render_to_expansion_map`] — the JSON object
+    /// parsed into a [`ExpansionMap`] (`BTreeMap<String, Vec<String>>`).
+    ///
+    /// For scores without `<expansion>` markers, returns an empty map.
+    pub fn expansion_map(&mut self) -> Result<ExpansionMap> {
+        let json = self.render_to_expansion_map()?;
         Ok(serde_json::from_str(&json)?)
     }
 

@@ -42,6 +42,10 @@ rust::String render_to_midi(vrv::Toolkit &tk) {
     return rust::String(tk.RenderToMIDI());
 }
 
+rust::String render_to_expansion_map(vrv::Toolkit &tk) {
+    return rust::String(tk.RenderToExpansionMap());
+}
+
 rust::String render_to_timemap(vrv::Toolkit &tk, rust::Str json_options) {
     return rust::String(tk.RenderToTimemap(std::string(json_options)));
 }
