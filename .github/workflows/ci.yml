@@ -102,3 +102,37 @@ jobs:
       - name: sccache stats
         run: nix-shell --run "sccache --show-stats"
         if: always()
+
+  sanitize:
+    name: sanitize (ASan + UBSan, ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sanitize
+
+      - name: Install mold
+        uses: rui314/setup-mold@v1
+
+      - name: Use mold as Rust linker
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+
+      # ASan typically reports "shadow memory range interleaves with an
+      # existing memory mapping" on aslr-enabled systems; disable per-test.
+      - name: cargo test (sanitize)
+        env:
+          # Make ASan failures fatal but readable; halt-on-error keeps the
+          # first finding visible without a flood of follow-on noise.
+          ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: cargo test --workspace --features verovio/sanitize --verbose
