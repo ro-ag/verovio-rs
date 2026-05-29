@@ -371,6 +371,89 @@ fn sustain_override_inserts_cc64() {
     assert_eq!(find_cc64(2), Some(0), "sustain Some(false) → pedal up (0)");
 }
 
+// -- transpose / expression --------------------------------------------------
+
+#[test]
+fn transpose_shifts_every_note_on_pitch() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+
+    // Default: treble notes are G4 = 67. Transposed up an octave: 79.
+    let mut overrides = BTreeMap::new();
+    overrides.insert(1, TrackOverride { transpose: Some(12), ..Default::default() });
+    let policy = MidiTrackPolicy { overrides, ..MidiTrackPolicy::default() };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut treble_keys = Vec::new();
+    for ev in &smf.tracks[1] {
+        if let TrackEventKind::Midi {
+            message: MidiMessage::NoteOn { key, vel },
+            ..
+        } = &ev.kind
+        {
+            if vel.as_int() > 0 {
+                treble_keys.push(key.as_int());
+            }
+        }
+    }
+    assert!(
+        treble_keys.iter().all(|&k| k == 79),
+        "all treble notes should be 67+12=79 after +12 transpose, got {treble_keys:?}"
+    );
+}
+
+#[test]
+fn transpose_clamps_to_midi_range() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    // +200 semitones would overflow past 127; expect clamp.
+    let mut overrides = BTreeMap::new();
+    overrides.insert(1, TrackOverride { transpose: Some(127), ..Default::default() });
+    let policy = MidiTrackPolicy { overrides, ..MidiTrackPolicy::default() };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    for ev in &smf.tracks[1] {
+        if let TrackEventKind::Midi {
+            message: MidiMessage::NoteOn { key, .. },
+            ..
+        } = &ev.kind
+        {
+            assert!(key.as_int() <= 127, "key exceeded midi range");
+        }
+    }
+}
+
+#[test]
+fn expression_override_inserts_cc11() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(1, TrackOverride { expression: Some(96), ..Default::default() });
+    let policy = MidiTrackPolicy { overrides, ..MidiTrackPolicy::default() };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+    let smf = Smf::parse(&bytes).expect("smf parse");
+
+    let mut found = None;
+    for ev in &smf.tracks[1] {
+        if let TrackEventKind::Midi {
+            message: MidiMessage::Controller { controller, value },
+            ..
+        } = &ev.kind
+        {
+            if controller.as_int() == 11 {
+                found = Some(value.as_int());
+                break;
+            }
+        }
+    }
+    assert_eq!(found, Some(96));
+}
+
 // -- SMF-level meta overrides -----------------------------------------------
 
 #[test]

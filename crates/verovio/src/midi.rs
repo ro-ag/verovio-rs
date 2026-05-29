@@ -96,6 +96,18 @@ pub struct TrackOverride {
     /// track; `Some(false)` inserts an explicit "pedal up" (value 0);
     /// `None` leaves the synth default.
     pub sustain: Option<bool>,
+
+    /// Transpose every NoteOn / NoteOff / Aftertouch key on this track by
+    /// the given number of semitones. Useful for octave substitution
+    /// (e.g., bass on guitar one octave higher) or capo-style shifts.
+    /// Resulting MIDI keys are clamped to `0..=127`.
+    pub transpose: Option<i8>,
+
+    /// CC#11 (Expression Controller) value (0-127) inserted at start of
+    /// the track. Distinct from volume (CC#7): expression is meant for
+    /// gradual swells / dynamic shaping, while volume sets a track's
+    /// nominal level.
+    pub expression: Option<u8>,
 }
 
 /// Per-track policy applied to a Verovio SMF. Combine with
@@ -257,16 +269,31 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
             }
         });
 
-        // 1) Reassign channel + apply mute on existing events.
-        if target_channel.is_some() || override_.map(|o| o.mute).unwrap_or(false) {
+        // 1) Reassign channel + apply mute + apply transpose on existing
+        //    events.
+        let mute = override_.map(|o| o.mute).unwrap_or(false);
+        let transpose = override_.and_then(|o| o.transpose).unwrap_or(0);
+        if target_channel.is_some() || mute || transpose != 0 {
             for ev in track.iter_mut() {
                 if let TrackEventKind::Midi { channel, message } = &mut ev.kind {
                     if let Some(ch) = target_channel {
                         *channel = u4::from(ch & 0x0F);
                     }
-                    if override_.map(|o| o.mute).unwrap_or(false) {
+                    if mute {
                         if let MidiMessage::NoteOn { vel, .. } = message {
                             *vel = u7::from(0);
+                        }
+                    }
+                    if transpose != 0 {
+                        match message {
+                            MidiMessage::NoteOn { key, .. }
+                            | MidiMessage::NoteOff { key, .. }
+                            | MidiMessage::Aftertouch { key, .. } => {
+                                let new_key =
+                                    (key.as_int() as i16 + transpose as i16).clamp(0, 127) as u8;
+                                *key = u7::from(new_key);
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -321,6 +348,18 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
                         message: MidiMessage::Controller {
                             controller: u7::from(64),
                             value: u7::from(value & 0x7F),
+                        },
+                    },
+                });
+            }
+            if let Some(expression) = o.expression {
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(11),
+                            value: u7::from(expression & 0x7F),
                         },
                     },
                 });

@@ -67,6 +67,20 @@ impl crate::Toolkit {
         svg_to_png(&svg, scale)
     }
 
+    /// Render every page to PNG bytes — one PNG per page, returned in
+    /// page order (1, 2, 3, …). Convenience over looping
+    /// [`Self::render_to_png`] yourself; useful for thumbnail strips and
+    /// preview galleries. Behind the `png` feature.
+    #[cfg(feature = "png")]
+    pub fn render_to_png_all_pages(&mut self, scale: f32) -> crate::Result<Vec<Vec<u8>>> {
+        let pages = self.page_count();
+        let mut out = Vec::with_capacity(pages as usize);
+        for page in 1..=pages {
+            out.push(self.render_to_png(page, scale)?);
+        }
+        Ok(out)
+    }
+
     /// Render a single page to PDF bytes. Behind the `pdf` feature.
     #[cfg(feature = "pdf")]
     pub fn render_to_pdf(&mut self, page: u32) -> crate::Result<Vec<u8>> {

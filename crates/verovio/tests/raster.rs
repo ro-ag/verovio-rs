@@ -59,6 +59,27 @@ fn svg_to_png_pure_function_matches_toolkit_method() {
     assert_eq!(via_function, via_method);
 }
 
+#[cfg(feature = "png")]
+#[test]
+fn render_to_png_all_pages_returns_one_per_page() {
+    const MANY_PAGE_PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c/'4d/4e\n@end:s\n";
+    let mut tk = Toolkit::from_data(MANY_PAGE_PAE).expect("PAE load");
+    let pages = tk.page_count();
+    let pngs = tk
+        .render_to_png_all_pages(1.0)
+        .expect("render_to_png_all_pages");
+    assert_eq!(pngs.len(), pages as usize);
+    for (i, png) in pngs.iter().enumerate() {
+        assert_eq!(
+            &png[..8],
+            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+            "page {} missing PNG magic",
+            i + 1
+        );
+    }
+}
+
 // -- PDF ---------------------------------------------------------------------
 
 #[cfg(feature = "pdf")]
