@@ -13,7 +13,7 @@ authors = ["Rodrigo Agurto <12665665+ro-ag@users.noreply.github.com>"]
 [workspace.dependencies]
 cxx = "1.0"
 cxx-build = "1.0"
-cmake = "0.1"
+cc = "1.2"
 
 [profile.release]
 lto = "thin"

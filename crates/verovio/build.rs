@@ -27,11 +27,4 @@ fn main() {
     if let Some(libdir) = path.parent() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", libdir.display());
     }
-
-    // Also propagate the libverovio.so rpath that verovio-sys's build.rs
-    // emitted into DEP_VEROVIO_RPATH via the `links` metadata channel — see
-    // the matching cargo:rpath= line in verovio-sys/build.rs.
-    if let Ok(rpath) = std::env::var("DEP_VEROVIO_RPATH") {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{rpath}");
-    }
 }
