@@ -38,6 +38,10 @@ rust::String render_to_svg(vrv::Toolkit &tk, int32_t page_no, bool xml_declarati
     return rust::String(tk.RenderToSVG(page_no, xml_declaration));
 }
 
+rust::String render_to_midi(vrv::Toolkit &tk) {
+    return rust::String(tk.RenderToMIDI());
+}
+
 rust::String render_to_timemap(vrv::Toolkit &tk, rust::Str json_options) {
     return rust::String(tk.RenderToTimemap(std::string(json_options)));
 }

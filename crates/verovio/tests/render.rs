@@ -72,6 +72,61 @@ fn render_to_svg_without_loaded_data_fails() {
 }
 
 #[test]
+fn render_to_midi_returns_base64_with_midi_header() {
+    let mut tk = loaded_toolkit();
+    let midi = tk.render_to_midi().expect("midi render");
+    // Verovio's RenderToMIDI base64-encodes a standard SMF file. SMF starts
+    // with the 4-byte ASCII tag "MThd"; base64 of that is "TVRoZA".
+    assert!(
+        midi.starts_with("TVRoZA"),
+        "expected base64-encoded MThd header, got first 20 chars: {}",
+        &midi[..midi.len().min(20)]
+    );
+}
+
+#[test]
+fn render_to_midi_into_reuses_buffer() {
+    let mut tk = loaded_toolkit();
+    let mut buf = String::with_capacity(1024);
+    tk.render_to_midi_into(&mut buf).expect("midi render");
+    let cap = buf.capacity();
+    tk.render_to_midi_into(&mut buf).expect("midi render again");
+    assert!(buf.capacity() >= cap);
+}
+
+#[test]
+fn render_to_midi_without_loaded_data_fails() {
+    let mut tk = Toolkit::new();
+    let res = tk.render_to_midi();
+    assert!(
+        matches!(res, Err(Error::RenderFailed { page: 0 })),
+        "got {res:?}"
+    );
+}
+
+// Verovio's render path asserts inside `Doc::GetVisibleScores` on an empty
+// doc (`m_visibleScores.empty()`) and SIGABRTs the whole process. The safe
+// wrapper guards every render-family method by checking `page_count() == 0`
+// before crossing the bridge. These tests pin that protection — if a future
+// commit removes a guard, the test binary will abort instead of returning.
+#[test]
+fn render_to_timemap_without_loaded_data_returns_err() {
+    let mut tk = Toolkit::new();
+    let res = tk.render_to_timemap();
+    assert!(
+        matches!(res, Err(Error::RenderFailed { page: 0 })),
+        "got {res:?}"
+    );
+}
+
+#[test]
+fn elements_at_time_without_loaded_data_returns_empty_json() {
+    let mut tk = Toolkit::new();
+    let json = tk.elements_at_time(0);
+    assert_eq!(json, "{}");
+}
+
+#[test]
 fn render_to_timemap_returns_json_array() {
     let mut tk = loaded_toolkit();
     let json = tk.render_to_timemap().expect("timemap render");

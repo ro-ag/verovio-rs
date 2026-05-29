@@ -323,11 +323,54 @@ impl Toolkit {
         Ok(())
     }
 
+    /// Render the loaded document to MIDI, returned as **base64-encoded**
+    /// bytes (Verovio's upstream convention so the binary payload fits in a
+    /// `std::string`).
+    ///
+    /// Decode with any base64 crate (e.g. `base64::engine::general_purpose
+    /// ::STANDARD.decode(&midi)`) to get the raw `Vec<u8>` `.mid` payload.
+    /// Returns [`Error::RenderFailed`] (with `page: 0`) if no document is
+    /// loaded (Verovio's `RenderToMIDI` would otherwise hit an internal
+    /// `assert(!m_visibleScores.empty())` and SIGABRT the process — we
+    /// gate on `page_count() == 0` first).
+    pub fn render_to_midi(&mut self) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let midi = ffi::render_to_midi(self.inner.pin_mut());
+        if midi.is_empty() {
+            Err(Error::RenderFailed { page: 0 })
+        } else {
+            Ok(midi)
+        }
+    }
+
+    /// Render to MIDI, reusing the caller's buffer. See [`Self::render_to_midi`]
+    /// for the encoding contract.
+    pub fn render_to_midi_into(&mut self, out: &mut String) -> Result<()> {
+        out.clear();
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let midi = ffi::render_to_midi(self.inner.pin_mut());
+        if midi.is_empty() {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        out.push_str(&midi);
+        Ok(())
+    }
+
     /// Render the document's playback timemap as a JSON string.
     ///
     /// The timemap is the playhead-sync map xpart needs:
     /// `[{tstamp_ms, on:[ids], off:[ids]}, ...]`. Parse with `serde_json`.
+    ///
+    /// Returns [`Error::RenderFailed`] (with `page: 0`) if no document is
+    /// loaded (Verovio's score-walk would otherwise assert).
     pub fn render_to_timemap(&mut self) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
         let json = ffi::render_to_timemap(self.inner.pin_mut(), "");
         if json.is_empty() {
             Err(Error::RenderFailed { page: 0 })
@@ -339,6 +382,9 @@ impl Toolkit {
     /// Render the timemap, reusing the caller's buffer.
     pub fn render_to_timemap_into(&mut self, out: &mut String) -> Result<()> {
         out.clear();
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
         let json = ffi::render_to_timemap(self.inner.pin_mut(), "");
         if json.is_empty() {
             return Err(Error::RenderFailed { page: 0 });
@@ -364,7 +410,13 @@ impl Toolkit {
     /// Return the element IDs active at the given playback time, as a JSON
     /// document. The shape upstream is roughly `{notes: [...], page: N}`.
     /// Parse with `serde_json`.
+    ///
+    /// Returns `"{}"` if no document is loaded (Verovio's score-walk would
+    /// otherwise assert).
     pub fn elements_at_time(&mut self, millis: u32) -> String {
+        if self.page_count() == 0 {
+            return "{}".into();
+        }
         ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32)
     }
 
@@ -372,6 +424,10 @@ impl Toolkit {
     /// into the caller's buffer.
     pub fn elements_at_time_into(&mut self, millis: u32, out: &mut String) {
         out.clear();
+        if self.page_count() == 0 {
+            out.push_str("{}");
+            return;
+        }
         let json = ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32);
         out.push_str(&json);
     }
