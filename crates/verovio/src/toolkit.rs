@@ -254,6 +254,25 @@ impl Toolkit {
         Ok(bytes)
     }
 
+    /// Render to MIDI and apply a per-track policy (channel reassignment,
+    /// instrument override, volume, mute) to the SMF bytes before returning.
+    ///
+    /// Verovio emits every staff on MIDI channel 0 by default with no
+    /// program-change / volume events. This wraps
+    /// [`crate::midi::apply_track_policy`] to give consumers genuine
+    /// multi-channel MIDI output — each staff as its own voice with its
+    /// own instrument and level.
+    ///
+    /// See [`MidiTrackPolicy`](crate::midi::MidiTrackPolicy) for the
+    /// shape of the policy and [`crate::midi`] for the design rationale.
+    pub fn render_to_midi_bytes_with_policy(
+        &mut self,
+        policy: &crate::midi::MidiTrackPolicy,
+    ) -> Result<Vec<u8>> {
+        let bytes = self.render_to_midi_bytes()?;
+        crate::midi::apply_track_policy(&bytes, policy).ok_or(Error::RenderFailed { page: 0 })
+    }
+
     /// Render the document's playback timemap as a JSON string.
     ///
     /// The timemap is the playhead-sync map xpart needs:

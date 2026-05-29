@@ -49,6 +49,7 @@
 mod error;
 mod log;
 pub mod lookup;
+pub mod midi;
 mod toolkit;
 mod types;
 
