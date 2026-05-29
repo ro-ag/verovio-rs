@@ -34,4 +34,20 @@ bool set_options(vrv::Toolkit &tk, rust::Str options) {
     return tk.SetOptions(std::string(options));
 }
 
+rust::String render_to_svg(vrv::Toolkit &tk, int32_t page_no, bool xml_declaration) {
+    return rust::String(tk.RenderToSVG(page_no, xml_declaration));
+}
+
+rust::String render_to_timemap(vrv::Toolkit &tk, rust::Str json_options) {
+    return rust::String(tk.RenderToTimemap(std::string(json_options)));
+}
+
+void redo_layout(vrv::Toolkit &tk, rust::Str json_options) {
+    tk.RedoLayout(std::string(json_options));
+}
+
+rust::String get_elements_at_time(vrv::Toolkit &tk, int32_t millisec) {
+    return rust::String(tk.GetElementsAtTime(millisec));
+}
+
 } // namespace vrv_rs

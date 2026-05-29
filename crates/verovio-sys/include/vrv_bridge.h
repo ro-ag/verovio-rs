@@ -20,4 +20,15 @@ rust::String get_options(const vrv::Toolkit &tk);
 rust::String get_default_options(const vrv::Toolkit &tk);
 bool set_options(vrv::Toolkit &tk, rust::Str options);
 
+// Rendering surface — every method here returns an owned std::string upstream
+// and Verovio offers no streaming overload, so the inevitable C++ allocation
+// happens regardless. The Rust-side `_into` variants in the safe wrapper
+// still eliminate the per-call `String` heap churn for the caller.
+rust::String render_to_svg(vrv::Toolkit &tk, int32_t page_no, bool xml_declaration);
+rust::String render_to_timemap(vrv::Toolkit &tk, rust::Str json_options);
+
+void redo_layout(vrv::Toolkit &tk, rust::Str json_options);
+
+rust::String get_elements_at_time(vrv::Toolkit &tk, int32_t millisec);
+
 } // namespace vrv_rs

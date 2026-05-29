@@ -3,9 +3,11 @@
 //!
 //! # Status
 //!
-//! Pre-rendering slice: [`Toolkit::new`], [`Toolkit::load_data`],
-//! [`Toolkit::page_count`], and the option getters/setters are exposed.
-//! `render_to_svg` and friends land in the next slice.
+//! API surface for xpart's needs: [`Toolkit::new`], [`Toolkit::load_data`],
+//! [`Toolkit::page_count`], the option getters/setters, the rendering surface
+//! ([`Toolkit::render_to_svg`], [`Toolkit::render_to_timemap`],
+//! [`Toolkit::redo_layout`], [`Toolkit::elements_at_time`]), plus `_into`
+//! buffer-reuse variants for every allocating method.
 //!
 //! # Resource files
 //!
@@ -70,6 +72,13 @@ pub enum Error {
     /// `SetOptions` returned `false`. The JSON either failed to parse or named
     /// an option Verovio doesn't recognize.
     OptionsRejected,
+    /// A render call returned an empty string. Typically means no document is
+    /// loaded or the requested page is out of range.
+    RenderFailed {
+        /// 1-indexed page that was requested. `0` for whole-document renders
+        /// (e.g. timemap).
+        page: u32,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -77,6 +86,10 @@ impl std::fmt::Display for Error {
         match self {
             Error::LoadFailed => f.write_str("Verovio failed to load data"),
             Error::OptionsRejected => f.write_str("Verovio rejected options"),
+            Error::RenderFailed { page: 0 } => f.write_str("Verovio render returned empty"),
+            Error::RenderFailed { page } => {
+                write!(f, "Verovio render returned empty for page {page}")
+            }
         }
     }
 }
@@ -159,6 +172,87 @@ impl Toolkit {
         } else {
             Err(Error::OptionsRejected)
         }
+    }
+
+    /// Render a single page to SVG. `page` is 1-indexed (Verovio's convention).
+    ///
+    /// Returns [`Error::RenderFailed`] if no document is loaded or the
+    /// requested page is out of range. (Upstream's degenerate-but-valid
+    /// `<svg width="0px" …>` response is detected via the page-count check;
+    /// the layout pass it triggers is cached after the first call.)
+    pub fn render_to_svg(&mut self, page: u32) -> Result<String> {
+        if page == 0 || page > self.page_count() {
+            return Err(Error::RenderFailed { page });
+        }
+        Ok(ffi::render_to_svg(self.inner.pin_mut(), page as i32, false))
+    }
+
+    /// Render a single page to SVG, reusing the caller's buffer.
+    ///
+    /// `out` is cleared then filled. The C++ side still allocates its own
+    /// `std::string` per call (Verovio has no streaming overload), but
+    /// repeated calls in a render loop avoid Rust-side `String` reallocation.
+    pub fn render_to_svg_into(&mut self, page: u32, out: &mut String) -> Result<()> {
+        out.clear();
+        if page == 0 || page > self.page_count() {
+            return Err(Error::RenderFailed { page });
+        }
+        let svg = ffi::render_to_svg(self.inner.pin_mut(), page as i32, false);
+        out.push_str(&svg);
+        Ok(())
+    }
+
+    /// Render the document's playback timemap as a JSON string.
+    ///
+    /// The timemap is the playhead-sync map xpart needs:
+    /// `[{tstamp_ms, on:[ids], off:[ids]}, ...]`. Parse with `serde_json`.
+    pub fn render_to_timemap(&mut self) -> Result<String> {
+        let json = ffi::render_to_timemap(self.inner.pin_mut(), "");
+        if json.is_empty() {
+            Err(Error::RenderFailed { page: 0 })
+        } else {
+            Ok(json)
+        }
+    }
+
+    /// Render the timemap, reusing the caller's buffer.
+    pub fn render_to_timemap_into(&mut self, out: &mut String) -> Result<()> {
+        out.clear();
+        let json = ffi::render_to_timemap(self.inner.pin_mut(), "");
+        if json.is_empty() {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        out.push_str(&json);
+        Ok(())
+    }
+
+    /// Force a layout pass on the currently-loaded document.
+    ///
+    /// Layout happens lazily on the first render call; explicit
+    /// `redo_layout` is only needed after option changes that affect layout.
+    pub fn redo_layout(&mut self) {
+        ffi::redo_layout(self.inner.pin_mut(), "");
+    }
+
+    /// Force a layout pass with a JSON options overlay applied for this
+    /// pass only.
+    pub fn redo_layout_with_options(&mut self, options: &str) {
+        ffi::redo_layout(self.inner.pin_mut(), options);
+    }
+
+    /// Return the element IDs active at the given playback time, as a JSON
+    /// document. The shape upstream is roughly `{notes: [...], page: N}`.
+    /// Parse with `serde_json`.
+    pub fn elements_at_time(&mut self, millis: u32) -> String {
+        ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32)
+    }
+
+    /// Return the element IDs active at the given playback time, written
+    /// into the caller's buffer.
+    pub fn elements_at_time_into(&mut self, millis: u32, out: &mut String) {
+        out.clear();
+        let json = ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32);
+        out.push_str(&json);
     }
 }
 
