@@ -1,0 +1,42 @@
+verovio-rs
+Copyright (C) 2026 Rodrigo Agurto and contributors
+Licensed under LGPL-3.0-or-later (see LICENSE).
+
+This product bundles the following third-party code:
+
+────────────────────────────────────────────────────────────────────────
+Verovio — https://www.verovio.org/
+    Vendored in `crates/verovio-sys/vendor/verovio/` as a git submodule
+    pinned to release tag `version-6.2.1`. RISM Digital Center.
+    Licensed under LGPL-3.0-or-later (see COPYING.LESSER in that
+    directory).
+
+The Verovio source tree ships with the following third-party libraries,
+all under permissive licenses compatible with LGPL-3.0:
+
+    pugixml         — MIT  (Arseny Kapoulkine)
+    jsonxx          — MIT  (Hong Jiang)
+    humlib          — BSD-2-Clause  (Craig Sapp)
+    midifile        — BSD-2-Clause  (Craig Sapp)
+    miniz-cpp       — MIT  (Thomas Fussell)
+    tuning-library  — MIT  (Paul Walker)
+    crc             — Public Domain  (Michael Barr, 2000)
+
+Their full license texts are present alongside their source under
+`crates/verovio-sys/vendor/verovio/include/{pugi,json,hum,midi,zip,
+tuning-library,crc}/`.
+
+────────────────────────────────────────────────────────────────────────
+SMuFL fonts bundled by `crates/verovio-data/`
+────────────────────────────────────────────────────────────────────────
+The `verovio-data` crate bundles Verovio's `data/` directory at compile
+time. The fonts are distributed under the SIL Open Font License (OFL)
+1.1; see each font's metadata file (e.g. `data/Bravura.xml`) for the
+authoritative attribution string.
+
+    Bravura     — SIL OFL 1.1, Steinberg Media Technologies
+    Leipzig     — SIL OFL 1.1, MuseScore
+    Gootville   — SIL OFL 1.1, MuseScore
+    Leland      — SIL OFL 1.1, MuseScore
+    Petaluma    — SIL OFL 1.1, Steinberg Media Technologies
+    Liberation  — SIL OFL 1.1, Red Hat
