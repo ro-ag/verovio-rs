@@ -1,19 +1,29 @@
-//! Walk a loaded score's timemap and report which note IDs are sounding at
-//! each event boundary. Demonstrates the typed [`Timemap`] consumer shape
-//! that xpart needs for playhead-to-notation sync.
+//! Simulate playback: walk a loaded score at fixed tick intervals and report
+//! which note IDs are sounding at each tick.
+//!
+//! This is the shape an actual playback driver takes — call `tk.timemap()`
+//! exactly once at load time, then query the cached `Vec<TimemapEvent>` at
+//! the audio / UI thread's rate using
+//! [`verovio::lookup::sounding_at_into`]. Zero FFI calls and zero JSON
+//! parsing per tick.
 //!
 //! Run with:
 //!     cargo run --example playback_simulation
 //!
-//! Sample output for a one-bar PAE fixture:
-//!     [0.0 ms,   q=0]  on:[n2690c7]                tempo=120
-//!     [500.0 ms, q=1]  off:[n2690c7]
-//!     [1000.0 ms, q=2] (silence)
+//! Sample output for a one-bar PAE fixture (one G quarter note, one rest):
+//!     Playing back 1000 ms in 100 ms ticks…
+//!       [    0 ms] sounding=["n2690c7"]
+//!       [  100 ms] sounding=["n2690c7"]
+//!       [  200 ms] sounding=["n2690c7"]
+//!       …
+//!       [  500 ms] sounding=["n2690c7"]   ← note still sounds at its off-event
+//!       [  600 ms] (silence)
+//!       …
 
-use std::collections::BTreeSet;
 use std::error::Error;
 
-use verovio::{TimemapEvent, Toolkit};
+use verovio::lookup::sounding_at_into;
+use verovio::Toolkit;
 
 const SAMPLE_PAE: &str = "\
 @start:s
@@ -25,45 +35,38 @@ const SAMPLE_PAE: &str = "\
 @end:s
 ";
 
+/// Playback tick interval. 10 Hz is slow enough to read in a terminal;
+/// production drivers would run at 60 Hz (UI) or 44.1 kHz (audio).
+const PLAYBACK_TICK_MS: f64 = 100.0;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut tk = Toolkit::from_data(SAMPLE_PAE)?;
+
+    // ← The only FFI + JSON crossing in this whole program.
     let timemap = tk.timemap()?;
 
-    let mut sounding: BTreeSet<String> = BTreeSet::new();
-    for ev in &timemap {
-        for id in &ev.on {
-            sounding.insert(id.clone());
+    let end_ms = timemap.last().map(|e| e.tstamp).unwrap_or(0.0);
+
+    println!(
+        "verovio {}: playing back {:.0} ms in {:.0} ms ticks…",
+        tk.version(),
+        end_ms,
+        PLAYBACK_TICK_MS
+    );
+
+    // Reuse one allocation across every tick — sounding_at_into clears and
+    // refills the buffer in place.
+    let mut active = Vec::with_capacity(16);
+    let mut t = 0.0;
+    while t <= end_ms {
+        sounding_at_into(&timemap, t, &mut active);
+        if active.is_empty() {
+            println!("  [{t:>5.0} ms] (silence)");
+        } else {
+            println!("  [{t:>5.0} ms] sounding={active:?}");
         }
-        for id in &ev.off {
-            sounding.remove(id);
-        }
-        render_event(ev, &sounding);
+        t += PLAYBACK_TICK_MS;
     }
 
     Ok(())
-}
-
-fn render_event(ev: &TimemapEvent, sounding: &BTreeSet<String>) {
-    let pos = format!("[{:.1} ms, q={}]", ev.tstamp, ev.qstamp);
-    let now: Vec<&str> = sounding.iter().map(String::as_str).collect();
-    let onset = if ev.on.is_empty() {
-        String::new()
-    } else {
-        format!("on:[{}] ", ev.on.join(","))
-    };
-    let offset = if ev.off.is_empty() {
-        String::new()
-    } else {
-        format!("off:[{}] ", ev.off.join(","))
-    };
-    let tempo = ev
-        .tempo
-        .map(|bpm| format!("tempo={bpm:.0}"))
-        .unwrap_or_default();
-    let body = if now.is_empty() {
-        "(silence)".to_string()
-    } else {
-        format!("sounding=[{}]", now.join(","))
-    };
-    println!("  {pos}  {onset}{offset}{body} {tempo}");
 }
