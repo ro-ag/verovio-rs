@@ -1,6 +1,9 @@
 //! Tests for the cache-aware lookup helpers in `verovio::lookup`.
 
-use verovio::lookup::{sounding_at, sounding_at_into};
+use verovio::lookup::{
+    duration_ms, events_in_range, next_event_after, prev_event_before, sounding_at,
+    sounding_at_into, PlaybackCursor,
+};
 use verovio::{TimemapEvent, Toolkit};
 
 const SAMPLE_PAE: &str = "\
@@ -118,6 +121,150 @@ fn sounding_at_into_reuses_buffer_capacity() {
     sounding_at_into(&tm, 750.0, &mut buf);
     assert_eq!(buf, vec!["n2".to_string()]);
     assert!(buf.capacity() >= initial_cap, "buffer capacity shrank");
+}
+
+// -- duration_ms ------------------------------------------------------------
+
+#[test]
+fn duration_ms_returns_last_event_tstamp() {
+    let tm = fixture_timemap();
+    assert_eq!(duration_ms(&tm), 1000.0);
+}
+
+#[test]
+fn duration_ms_empty_timemap_returns_zero() {
+    let tm: Vec<TimemapEvent> = vec![];
+    assert_eq!(duration_ms(&tm), 0.0);
+}
+
+// -- events_in_range --------------------------------------------------------
+
+#[test]
+fn events_in_range_returns_inclusive_slice() {
+    let tm = fixture_timemap();
+    // Inclusive on both ends.
+    let slice = events_in_range(&tm, 0.0, 500.0);
+    assert_eq!(slice.len(), 2);
+    assert_eq!(slice[0].tstamp, 0.0);
+    assert_eq!(slice[1].tstamp, 500.0);
+}
+
+#[test]
+fn events_in_range_with_inverted_bounds_returns_empty() {
+    let tm = fixture_timemap();
+    assert!(events_in_range(&tm, 500.0, 0.0).is_empty());
+}
+
+#[test]
+fn events_in_range_misses_open_intervals() {
+    let tm = fixture_timemap();
+    // No events in (500, 1000).
+    let slice = events_in_range(&tm, 500.1, 999.9);
+    assert!(slice.is_empty(), "got {slice:?}");
+}
+
+#[test]
+fn events_in_range_with_huge_window_returns_all() {
+    let tm = fixture_timemap();
+    let slice = events_in_range(&tm, f64::NEG_INFINITY, f64::INFINITY);
+    assert_eq!(slice.len(), tm.len());
+}
+
+// -- next_event_after / prev_event_before -----------------------------------
+
+#[test]
+fn next_event_after_returns_strictly_later_event() {
+    let tm = fixture_timemap();
+    assert_eq!(next_event_after(&tm, -100.0).map(|e| e.tstamp), Some(0.0));
+    assert_eq!(next_event_after(&tm, 0.0).map(|e| e.tstamp), Some(500.0));
+    assert_eq!(next_event_after(&tm, 499.9).map(|e| e.tstamp), Some(500.0));
+    assert_eq!(next_event_after(&tm, 500.0).map(|e| e.tstamp), Some(1000.0));
+    assert_eq!(next_event_after(&tm, 1000.0), None);
+    assert_eq!(next_event_after(&tm, 9999.0), None);
+}
+
+#[test]
+fn prev_event_before_returns_strictly_earlier_event() {
+    let tm = fixture_timemap();
+    assert_eq!(prev_event_before(&tm, -100.0), None);
+    assert_eq!(prev_event_before(&tm, 0.0), None);
+    assert_eq!(prev_event_before(&tm, 0.1).map(|e| e.tstamp), Some(0.0));
+    assert_eq!(prev_event_before(&tm, 500.0).map(|e| e.tstamp), Some(0.0));
+    assert_eq!(
+        prev_event_before(&tm, 1000.0).map(|e| e.tstamp),
+        Some(500.0)
+    );
+    assert_eq!(
+        prev_event_before(&tm, 9999.0).map(|e| e.tstamp),
+        Some(1000.0)
+    );
+}
+
+// -- PlaybackCursor ---------------------------------------------------------
+
+#[test]
+fn cursor_advance_matches_sounding_at_at_each_tick() {
+    let tm = fixture_timemap();
+    let mut cursor = PlaybackCursor::new(&tm);
+
+    // Tick through a fine grid that crosses every event boundary.
+    for tick in 0..=12 {
+        let ms = tick as f64 * 100.0;
+        let cursor_set = cursor.advance_to(ms).clone();
+        let cursor_vec: Vec<String> = cursor_set.into_iter().collect();
+        let oneshot = sounding_at(&tm, ms);
+        assert_eq!(
+            cursor_vec, oneshot,
+            "cursor disagrees with sounding_at at ms={ms}"
+        );
+    }
+}
+
+#[test]
+fn cursor_idempotent_at_same_ms() {
+    let tm = fixture_timemap();
+    let mut cursor = PlaybackCursor::new(&tm);
+    let first = cursor.advance_to(500.0).clone();
+    let second = cursor.advance_to(500.0).clone();
+    assert_eq!(
+        first, second,
+        "calling advance_to twice with same ms drifted"
+    );
+}
+
+#[test]
+fn cursor_seek_to_rewinds_correctly() {
+    let tm = fixture_timemap();
+    let mut cursor = PlaybackCursor::new(&tm);
+    let _ = cursor.advance_to(800.0);
+    let after_seek = cursor.seek_to(250.0).clone();
+    let oneshot = sounding_at(&tm, 250.0);
+    let cursor_vec: Vec<String> = after_seek.into_iter().collect();
+    assert_eq!(
+        cursor_vec, oneshot,
+        "seek_to didn't rewind to the right state"
+    );
+    assert_eq!(cursor.position_ms(), 250.0);
+}
+
+#[test]
+fn cursor_off_at_boundary_releases_on_next_tick() {
+    let tm = fixture_timemap();
+    let mut cursor = PlaybackCursor::new(&tm);
+    // At exactly t=500, n1 is still sounding (off event hasn't fired yet
+    // in the boundary semantic). The off applies only when we move past.
+    assert!(cursor.advance_to(500.0).contains("n1"));
+    assert!(cursor.advance_to(501.0).contains("n2"));
+    assert!(!cursor.advance_to(501.0).contains("n1"));
+}
+
+#[test]
+fn cursor_at_event_boundary_includes_onsets() {
+    let tm = fixture_timemap();
+    let mut cursor = PlaybackCursor::new(&tm);
+    // t=0 is the first event's tstamp; n1 should be sounding immediately.
+    let set = cursor.advance_to(0.0);
+    assert!(set.contains("n1"));
 }
 
 #[test]
