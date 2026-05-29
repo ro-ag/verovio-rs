@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use midly::{MetaMessage, MidiMessage, Smf, TrackEventKind};
-use verovio::midi::{MidiTrackPolicy, TrackOverride};
+use verovio::midi::{summarize, MidiTrackPolicy, TrackOverride};
 use verovio::Toolkit;
 
 const TWO_STAFF_MEI: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -246,6 +246,110 @@ fn mute_zeros_every_note_on_velocity_on_that_track() {
         t2_vels.iter().all(|&v| v == 0),
         "track 2 mute should zero all velocities, got {t2_vels:?}"
     );
+}
+
+// -- pan ---------------------------------------------------------------------
+
+#[test]
+fn pan_override_inserts_cc10() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            pan: Some(32),
+            ..Default::default()
+        },
+    ); // left-of-center
+    overrides.insert(
+        2,
+        TrackOverride {
+            pan: Some(96),
+            ..Default::default()
+        },
+    ); // right-of-center
+    let policy = MidiTrackPolicy {
+        overrides,
+        ..MidiTrackPolicy::default()
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+
+    let infos = summarize(&bytes).expect("summarize");
+    assert_eq!(infos[1].pan, Some(32));
+    assert_eq!(infos[2].pan, Some(96));
+}
+
+// -- summarize ---------------------------------------------------------------
+
+#[test]
+fn summarize_reports_meta_track_and_two_staff_tracks() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let bytes = tk.render_to_midi_bytes().expect("midi bytes");
+    let infos = summarize(&bytes).expect("summarize");
+
+    assert_eq!(infos.len(), 3, "expected meta + 2 staff tracks");
+
+    // Track 0 is the meta track — no audible notes, no channels.
+    assert_eq!(infos[0].track_index, 0);
+    assert_eq!(infos[0].audible_note_count, 0);
+    assert!(infos[0].channels.is_empty());
+
+    // Tracks 1 + 2 are staff tracks — each has 4 audible note onsets
+    // (one quarter note per beat in the one-measure fixture) and
+    // everything on channel 0 by Verovio default.
+    assert_eq!(infos[1].audible_note_count, 4);
+    assert_eq!(infos[1].channels, vec![0]);
+    assert_eq!(infos[2].audible_note_count, 4);
+    assert_eq!(infos[2].channels, vec![0]);
+}
+
+#[test]
+fn summarize_reflects_policy_after_application() {
+    let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        1,
+        TrackOverride {
+            program: Some(0),
+            volume: Some(110),
+            pan: Some(32),
+            ..Default::default()
+        },
+    );
+    overrides.insert(
+        2,
+        TrackOverride {
+            program: Some(42),
+            volume: Some(85),
+            pan: Some(96),
+            ..Default::default()
+        },
+    );
+    let policy = MidiTrackPolicy {
+        overrides,
+        auto_distribute_channels: true,
+    };
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
+
+    let infos = summarize(&bytes).expect("summarize");
+    assert_eq!(infos[1].channels, vec![0]);
+    assert_eq!(infos[1].program, Some(0));
+    assert_eq!(infos[1].volume, Some(110));
+    assert_eq!(infos[1].pan, Some(32));
+    assert_eq!(infos[2].channels, vec![1]);
+    assert_eq!(infos[2].program, Some(42));
+    assert_eq!(infos[2].volume, Some(85));
+    assert_eq!(infos[2].pan, Some(96));
+}
+
+#[test]
+fn summarize_invalid_bytes_returns_none() {
+    let garbage = b"\x00\x00\x00\x00not an smf";
+    assert!(summarize(garbage).is_none());
 }
 
 #[test]

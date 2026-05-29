@@ -74,6 +74,11 @@ pub struct TrackOverride {
     /// muting the track without removing its events (timing preserved for
     /// scheduling).
     pub mute: bool,
+
+    /// CC#10 (Pan) value (0-127) to insert at the start of the track.
+    /// `0` = hard left, `64` = center, `127` = hard right. `None` leaves
+    /// the synth default (typically center 64).
+    pub pan: Option<u8>,
 }
 
 /// Per-track policy applied to a Verovio SMF. Combine with
@@ -163,6 +168,18 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
                     },
                 });
             }
+            if let Some(pan) = o.pan {
+                prepend.push(TrackEvent {
+                    delta: 0.into(),
+                    kind: TrackEventKind::Midi {
+                        channel: u4::from(ch & 0x0F),
+                        message: MidiMessage::Controller {
+                            controller: u7::from(10),
+                            value: u7::from(pan & 0x7F),
+                        },
+                    },
+                });
+            }
             if !prepend.is_empty() {
                 // Find the first non-meta event (or the EndOfTrack) and
                 // splice the prepends right before it so timing is preserved.
@@ -180,4 +197,84 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
         let _ = MetaMessage::EndOfTrack;
     }
     smf
+}
+
+/// Per-track summary of an SMF — useful for inspecting what an SMF
+/// actually contains before / after applying a [`MidiTrackPolicy`].
+///
+/// Returned by [`summarize`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackInfo {
+    /// 0-indexed track position in the SMF.
+    pub track_index: u32,
+    /// Unique MIDI channels referenced by Midi events on this track.
+    /// Verovio's default output puts everything on `[0]` for every staff
+    /// track; after `auto_distribute_channels`, each non-meta track has
+    /// its own channel.
+    pub channels: Vec<u8>,
+    /// Number of `NoteOn` events with `vel > 0` (i.e. actually audible
+    /// onsets, not the velocity-0 form used as `NoteOff`).
+    pub audible_note_count: u32,
+    /// First `ProgramChange` program number on this track, if any.
+    pub program: Option<u8>,
+    /// First CC#7 (Channel Volume) value on this track, if any.
+    pub volume: Option<u8>,
+    /// First CC#10 (Pan) value on this track, if any.
+    pub pan: Option<u8>,
+    /// Sum of all `delta` ticks on the track — its total length in ticks.
+    pub end_tick: u64,
+}
+
+/// Parse `smf_bytes` and return a [`TrackInfo`] for each track. Returns
+/// `None` if the input isn't a valid SMF.
+///
+/// Pure function over [`midly::Smf`]; useful for tests, debugging, and
+/// surfacing the actual channel / instrument / volume distribution to a
+/// consumer that wants to verify a policy applied correctly.
+pub fn summarize(smf_bytes: &[u8]) -> Option<Vec<TrackInfo>> {
+    let smf = Smf::parse(smf_bytes).ok()?;
+    let mut out = Vec::with_capacity(smf.tracks.len());
+    for (idx, track) in smf.tracks.iter().enumerate() {
+        let mut channels: Vec<u8> = Vec::new();
+        let mut audible_note_count: u32 = 0;
+        let mut program: Option<u8> = None;
+        let mut volume: Option<u8> = None;
+        let mut pan: Option<u8> = None;
+        let mut end_tick: u64 = 0;
+        for ev in track.iter() {
+            end_tick += u32::from(ev.delta) as u64;
+            if let TrackEventKind::Midi { channel, message } = &ev.kind {
+                let ch = channel.as_int();
+                if !channels.contains(&ch) {
+                    channels.push(ch);
+                }
+                match message {
+                    MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0 => {
+                        audible_note_count += 1;
+                    }
+                    MidiMessage::ProgramChange { program: p } => {
+                        if program.is_none() {
+                            program = Some(p.as_int());
+                        }
+                    }
+                    MidiMessage::Controller { controller, value } => match controller.as_int() {
+                        7 if volume.is_none() => volume = Some(value.as_int()),
+                        10 if pan.is_none() => pan = Some(value.as_int()),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+        out.push(TrackInfo {
+            track_index: idx as u32,
+            channels,
+            audible_note_count,
+            program,
+            volume,
+            pan,
+            end_tick,
+        });
+    }
+    Some(out)
 }
