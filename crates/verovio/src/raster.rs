@@ -57,6 +57,106 @@ pub fn svg_to_pdf(svg: &str) -> crate::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Assemble a multi-page PDF document from a slice of SVG strings.
+/// Each SVG becomes one page, sized to the SVG's intrinsic dimensions
+/// converted at 72 DPI (PDF's native unit).
+///
+/// Uses [`svg2pdf::to_chunk`] to convert each SVG into an embeddable
+/// XObject, renumbers each chunk against a single PDF-wide ref
+/// allocator, and references the XObject from a `Page` with the right
+/// `MediaBox` and a scaling content stream.
+///
+/// Behind the `pdf` Cargo feature.
+#[cfg(feature = "pdf")]
+pub fn svgs_to_pdf(svgs: &[String]) -> crate::Result<Vec<u8>> {
+    use std::collections::HashMap;
+
+    use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect, Ref};
+    use svg2pdf::usvg::{Options, Tree};
+
+    if svgs.is_empty() {
+        return Err(crate::Error::RenderFailed { page: 0 });
+    }
+
+    let mut pdf = Pdf::new();
+    let mut next_id: i32 = 1;
+    let mut alloc = || -> Ref {
+        let r = Ref::new(next_id);
+        next_id += 1;
+        r
+    };
+
+    let catalog_ref = alloc();
+    let page_tree_ref = alloc();
+
+    // First pass: allocate page refs and content refs so we can write
+    // the pages tree's kids array up front.
+    let mut page_refs: Vec<Ref> = Vec::with_capacity(svgs.len());
+    let mut content_refs: Vec<Ref> = Vec::with_capacity(svgs.len());
+    for _ in svgs {
+        page_refs.push(alloc());
+        content_refs.push(alloc());
+    }
+
+    pdf.catalog(catalog_ref).pages(page_tree_ref);
+    {
+        let mut pages = pdf.pages(page_tree_ref);
+        pages.count(svgs.len() as i32).kids(page_refs.iter().copied());
+        pages.finish();
+    }
+
+    // Second pass: for each SVG, get its embed chunk + xobject ref,
+    // renumber into the document, write the page.
+    for (i, svg) in svgs.iter().enumerate() {
+        let tree = Tree::from_str(svg, &Options::default())
+            .map_err(|e| crate::Error::Xml(format!("usvg parse page {}: {e}", i + 1)))?;
+        let (chunk, svg_id) =
+            svg2pdf::to_chunk(&tree, svg2pdf::ConversionOptions::default())
+                .map_err(|e| crate::Error::Xml(format!("svg2pdf chunk page {}: {e}", i + 1)))?;
+
+        // Renumber every ref in the chunk into our global allocator.
+        let mut remap = HashMap::new();
+        let renumbered: Chunk = chunk.renumber(|old| {
+            *remap.entry(old).or_insert_with(|| {
+                let r = Ref::new(next_id);
+                next_id += 1;
+                r
+            })
+        });
+        let svg_ref = remap[&svg_id];
+
+        // Append the chunk's bytes into our PDF.
+        pdf.extend(&renumbered);
+
+        // Compute the page's intrinsic size — usvg reports it in pixels;
+        // at 72 DPI 1 px == 1 pt, which is PDF's native unit. So we use
+        // the values as-is.
+        let size = tree.size();
+        let width = size.width();
+        let height = size.height();
+
+        // svg2pdf's XObject has unit (1×1) bbox — scale + flip Y so the
+        // SVG fills the page with the correct orientation.
+        let mut content = Content::new();
+        content.transform([width, 0.0, 0.0, height, 0.0, 0.0]);
+        let xobj_name = Name(b"S");
+        content.x_object(xobj_name);
+        let content_bytes = content.finish();
+        pdf.stream(content_refs[i], &content_bytes);
+
+        let mut page = pdf.page(page_refs[i]);
+        page.media_box(Rect::new(0.0, 0.0, width, height));
+        page.parent(page_tree_ref);
+        page.contents(content_refs[i]);
+        let mut resources = page.resources();
+        resources.x_objects().pair(xobj_name, svg_ref);
+        resources.finish();
+        page.finish();
+    }
+
+    Ok(pdf.finish())
+}
+
 #[cfg(any(feature = "png", feature = "pdf"))]
 impl crate::Toolkit {
     /// Render a single page to PNG bytes. `scale = 1.0` matches the SVG's
@@ -86,5 +186,21 @@ impl crate::Toolkit {
     pub fn render_to_pdf(&mut self, page: u32) -> crate::Result<Vec<u8>> {
         let svg = self.render_to_svg(page)?;
         svg_to_pdf(&svg)
+    }
+
+    /// Render every page into a single multi-page PDF document.
+    /// Each page is sized to its rendered SVG's intrinsic dimensions.
+    /// Behind the `pdf` feature.
+    #[cfg(feature = "pdf")]
+    pub fn render_to_pdf_all_pages(&mut self) -> crate::Result<Vec<u8>> {
+        let pages = self.page_count();
+        if pages == 0 {
+            return Err(crate::Error::RenderFailed { page: 0 });
+        }
+        let mut svgs: Vec<String> = Vec::with_capacity(pages as usize);
+        for page in 1..=pages {
+            svgs.push(self.render_to_svg(page)?);
+        }
+        svgs_to_pdf(&svgs)
     }
 }

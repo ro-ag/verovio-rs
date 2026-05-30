@@ -22,7 +22,18 @@ sanitize-thread = ["verovio-sys/sanitize-thread"]
 png = ["dep:resvg"]
 # Convert a page's SVG to PDF bytes via `svg2pdf`. Adds `resvg` too
 # (svg2pdf builds on it) plus the PDF writer.
-pdf = ["dep:svg2pdf", "dep:resvg"]
+pdf = ["dep:svg2pdf", "dep:resvg", "dep:pdf-writer"]
+
+# Offline audio rendering of the rendered SMF using `rustysynth` (pure
+# Rust SoundFont 2 synthesizer). The caller provides SF2 bytes — the
+# crate does not bundle a SoundFont. Adds rustysynth (~150 KB compiled).
+audio = ["dep:rustysynth"]
+
+# Live audio playback through the OS default output device, used only
+# by `examples/live_playback.rs`. Pulls in `cpal`, which on Linux links
+# to alsa-lib (NixOS users: `nix-shell -p alsa-lib pkg-config`). Off by
+# default so `cargo test` on bare environments stays portable.
+live-audio = ["audio", "dep:cpal"]
 
 [dependencies]
 verovio-sys = { path = "../verovio-sys", version = "0.1.0" }
@@ -36,9 +47,16 @@ midly.workspace = true
 roxmltree.workspace = true
 resvg = { workspace = true, optional = true }
 svg2pdf = { workspace = true, optional = true }
+rustysynth = { workspace = true, optional = true }
+pdf-writer = { workspace = true, optional = true }
+cpal = { version = "0.15", optional = true }
 
 [dev-dependencies]
 criterion.workspace = true
+
+[[example]]
+name = "live_playback"
+required-features = ["live-audio"]
 
 [[bench]]
 name = "render"

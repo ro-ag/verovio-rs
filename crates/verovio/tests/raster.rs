@@ -104,3 +104,23 @@ fn render_to_pdf_out_of_range_page_propagates_error() {
     let res = tk.render_to_pdf(999);
     assert!(res.is_err(), "out-of-range page should error");
 }
+
+#[test]
+#[cfg(feature = "pdf")]
+fn render_to_pdf_all_pages_produces_valid_pdf() {
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c/4d/4e\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
+    let pdf = tk.render_to_pdf_all_pages().expect("multi-page pdf");
+    assert!(pdf.starts_with(b"%PDF"), "expected PDF magic");
+    assert!(pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"), "expected PDF EOF");
+    // Should reference at least one page.
+    assert!(pdf.windows(b"/Type /Page".len()).any(|w| w == b"/Type /Page"));
+}
+
+#[test]
+#[cfg(feature = "pdf")]
+fn svgs_to_pdf_with_empty_input_errors() {
+    let res = verovio::raster::svgs_to_pdf(&[]);
+    assert!(matches!(res, Err(verovio::Error::RenderFailed { page: 0 })));
+}

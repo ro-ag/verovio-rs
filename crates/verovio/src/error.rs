@@ -35,6 +35,10 @@ pub enum Error {
     /// [`Toolkit::staff_map`](crate::Toolkit::staff_map). The rendered SVG
     /// failed to parse — would be a Verovio bug, not a user error.
     Xml(String),
+    /// Offline audio render failure inside the `audio` feature
+    /// (`verovio::audio`). Wraps SoundFont parse / synthesizer init errors
+    /// from rustysynth.
+    Audio(String),
 }
 
 impl std::fmt::Display for Error {
@@ -50,6 +54,7 @@ impl std::fmt::Display for Error {
             Error::Json(e) => write!(f, "JSON parse error from Verovio output: {e}"),
             Error::Base64(e) => write!(f, "base64 decode error from Verovio MIDI output: {e}"),
             Error::Xml(s) => write!(f, "XML parse error from Verovio SVG output: {s}"),
+            Error::Audio(s) => write!(f, "audio render error: {s}"),
         }
     }
 }
