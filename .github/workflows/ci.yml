@@ -131,15 +131,17 @@ jobs:
       # concern — local sanitizer builds are not in shell.nix's contract.
       # RUSTFLAGS is set inside --run because shell.nix exports its own
       # RUSTFLAGS and that overrides any workflow-level `env:` entry.
-      # Build and run must both happen inside the *same* nix-shell. A single
-      # `cargo test` already does that, but on this Ubuntu runner the produced
-      # binary was binding to the host `/lib/x86_64-linux-gnu/libc.so.6` at
-      # exec time and dying with `undefined symbol: __nptl_change_stack_perm,
-      # version GLIBC_PRIVATE` before any test ran — a mismatch between the
-      # Nix-toolchain-linked sanitizer runtime and the host glibc. Splitting
-      # into `cargo test --no-run` + `cargo test` inside one nix-shell makes
-      # the build/run boundary explicit and keeps both phases under the same
-      # toolchain + runtime.
+      # Crucial: preserve shell.nix's RUSTFLAGS instead of overwriting it.
+      # shell.nix sets `-Wl,-rpath,${stdenv.cc.libc.out}/lib`, which is what
+      # keeps the produced binaries pointing at Nix's glibc at runtime. A
+      # bare `export RUSTFLAGS='-C linker=clang -C link-arg=-fuse-ld=lld'`
+      # silently discards that rpath, the binary then resolves libc.so.6
+      # against the runner's host `/lib/x86_64-linux-gnu/`, and the symbol
+      # lookup explodes (`__nptl_change_stack_perm, version GLIBC_PRIVATE`)
+      # before any test runs. Transform RUSTFLAGS in place instead: swap
+      # mold→lld (mold + cc-driver-managed sanitizer runtime don't combine
+      # cleanly) and append `-C linker=clang`. The Nix glibc rpath survives
+      # and the libstdc++ rpath from verovio's build.rs handles libstdc++.
       - name: cargo test (sanitize)
         env:
           # Make ASan failures fatal but readable; halt-on-error keeps the
@@ -152,7 +154,8 @@ jobs:
         run: |
           nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" --run '
             unset RUSTC_WRAPPER CC CXX
-            export RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld"
+            export RUSTFLAGS="${RUSTFLAGS//-fuse-ld=mold/-fuse-ld=lld} -C linker=clang"
+            echo "RUSTFLAGS=$RUSTFLAGS"
 
             cargo test --workspace --features verovio/sanitize --no-run --verbose
 
