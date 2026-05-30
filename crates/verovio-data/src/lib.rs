@@ -34,10 +34,4 @@ pub fn extract(dest: &Path) -> io::Result<()> {
 ///
 /// The first entry (Bravura) is Verovio's default and the SMuFL
 /// reference font.
-pub const AVAILABLE_FONTS: &[&str] = &[
-    "Bravura",
-    "Leipzig",
-    "Gootville",
-    "Leland",
-    "Petaluma",
-];
+pub const AVAILABLE_FONTS: &[&str] = &["Bravura", "Leipzig", "Gootville", "Leland", "Petaluma"];

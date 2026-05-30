@@ -273,5 +273,8 @@ fn render_to_svg_writer_invalid_page_errors() {
     let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("load");
     let mut buf: Vec<u8> = Vec::new();
     let res = tk.render_to_svg_writer(999, &mut buf);
-    assert!(matches!(res, Err(verovio::Error::RenderFailed { page: 999 })));
+    assert!(matches!(
+        res,
+        Err(verovio::Error::RenderFailed { page: 999 })
+    ));
 }

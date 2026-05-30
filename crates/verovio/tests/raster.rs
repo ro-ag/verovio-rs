@@ -113,9 +113,14 @@ fn render_to_pdf_all_pages_produces_valid_pdf() {
     let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
     let pdf = tk.render_to_pdf_all_pages().expect("multi-page pdf");
     assert!(pdf.starts_with(b"%PDF"), "expected PDF magic");
-    assert!(pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"), "expected PDF EOF");
+    assert!(
+        pdf.ends_with(b"%%EOF\n") || pdf.ends_with(b"%%EOF"),
+        "expected PDF EOF"
+    );
     // Should reference at least one page.
-    assert!(pdf.windows(b"/Type /Page".len()).any(|w| w == b"/Type /Page"));
+    assert!(pdf
+        .windows(b"/Type /Page".len())
+        .any(|w| w == b"/Type /Page"));
 }
 
 #[test]

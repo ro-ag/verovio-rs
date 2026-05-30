@@ -780,12 +780,7 @@ impl Toolkit {
     ///
     /// `from == 0` or `from > to` returns `Ok(String::new())`. `to` past
     /// the last measure is silently clamped by Verovio.
-    pub fn render_svg_measure_range(
-        &mut self,
-        from: u32,
-        to: u32,
-        joiner: &str,
-    ) -> Result<String> {
+    pub fn render_svg_measure_range(&mut self, from: u32, to: u32, joiner: &str) -> Result<String> {
         if from == 0 || from > to {
             return Ok(String::new());
         }
@@ -970,7 +965,11 @@ fn extract_path_points(d: &str, translate: (f64, f64), out: &mut Vec<(f64, f64)>
 }
 
 fn looks_like_xml(s: &str) -> bool {
-    s.starts_with("<?xml") || s.starts_with("<mei") || s.starts_with("<score-partwise") || s.starts_with("<score-timewise") || s.starts_with("<!DOCTYPE")
+    s.starts_with("<?xml")
+        || s.starts_with("<mei")
+        || s.starts_with("<score-partwise")
+        || s.starts_with("<score-timewise")
+        || s.starts_with("<!DOCTYPE")
 }
 
 fn parse_mei_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
@@ -982,10 +981,8 @@ fn parse_mei_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
         }
         let name = desc.tag_name().name();
         match name {
-            "title" => {
-                if md.title.is_none() {
-                    md.title = text_of(desc);
-                }
+            "title" if md.title.is_none() => {
+                md.title = text_of(desc);
             }
             "persName" => {
                 let role = desc.attribute("role").unwrap_or("");
@@ -998,10 +995,8 @@ fn parse_mei_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
                     _ => {}
                 }
             }
-            "availability" | "useRestrict" => {
-                if md.copyright.is_none() {
-                    md.copyright = text_of(desc);
-                }
+            "availability" | "useRestrict" if md.copyright.is_none() => {
+                md.copyright = text_of(desc);
             }
             "label" => {
                 // staffDef labels — captured in document order; the
@@ -1031,10 +1026,8 @@ fn parse_musicxml_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
         }
         let name = desc.tag_name().name();
         match name {
-            "work-title" => {
-                if md.title.is_none() {
-                    md.title = text_of(desc);
-                }
+            "work-title" if md.title.is_none() => {
+                md.title = text_of(desc);
             }
             "creator" => {
                 let typ = desc.attribute("type").unwrap_or("");
@@ -1045,10 +1038,8 @@ fn parse_musicxml_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
                     _ => {}
                 }
             }
-            "rights" => {
-                if md.copyright.is_none() {
-                    md.copyright = text_of(desc);
-                }
+            "rights" if md.copyright.is_none() => {
+                md.copyright = text_of(desc);
             }
             "part-name" => {
                 if let Some(t) = text_of(desc) {

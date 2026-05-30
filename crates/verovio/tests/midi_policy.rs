@@ -891,10 +891,7 @@ fn lyrics_inserted_at_quarter_stamps_on_meta_track() {
 fn cue_points_inserted_at_quarter_stamps_on_meta_track() {
     let mut tk = Toolkit::from_data(TWO_STAFF_MEI).expect("MEI load");
     let policy = MidiTrackPolicy {
-        cue_points: Some(vec![
-            (0.0, "intro".to_string()),
-            (2.0, "verse".to_string()),
-        ]),
+        cue_points: Some(vec![(0.0, "intro".to_string()), (2.0, "verse".to_string())]),
         ..MidiTrackPolicy::default()
     };
     let bytes = tk
@@ -932,7 +929,10 @@ fn panic_smf_emits_all_sound_off_and_all_notes_off_on_all_16_channels() {
             match controller.as_int() {
                 120 => cc120_channels.push(channel.as_int()),
                 123 => cc123_channels.push(channel.as_int()),
-                _ => panic!("unexpected controller in panic SMF: {}", controller.as_int()),
+                _ => panic!(
+                    "unexpected controller in panic SMF: {}",
+                    controller.as_int()
+                ),
             }
         }
     }
@@ -981,7 +981,9 @@ fn iter_smf_events_respects_tempo_override() {
         tempo_override: Some(custom_tempo),
         ..MidiTrackPolicy::default()
     };
-    let bytes = tk.render_to_midi_bytes_with_policy(&policy).expect("policy");
+    let bytes = tk
+        .render_to_midi_bytes_with_policy(&policy)
+        .expect("policy");
     let events = verovio::midi::iter_smf_events(&bytes).expect("iter");
 
     // At 60 BPM, a quarter-note onset lands at 1000 ms.
@@ -999,11 +1001,8 @@ fn iter_smf_events_respects_tempo_override() {
     assert!(!note_ons.is_empty(), "expected audible note-ons");
     // Onsets at q=0,1,2,3 at 60 BPM → 0, 1000, 2000, 3000 ms (allowing slack).
     let unique: std::collections::BTreeSet<i64> =
-        note_ons.iter().map(|x| (x.round() as i64)).collect();
-    assert!(
-        unique.contains(&0),
-        "no note-on at 0 ms: unique={unique:?}"
-    );
+        note_ons.iter().map(|x| x.round() as i64).collect();
+    assert!(unique.contains(&0), "no note-on at 0 ms: unique={unique:?}");
     assert!(
         unique.contains(&1000),
         "no note-on at ~1000 ms (60 BPM expected): unique={unique:?}"
@@ -1051,7 +1050,10 @@ fn with_solo_silences_non_audible_tracks() {
 
     let t1 = note_on_velocities(&smf, 1);
     let t2 = note_on_velocities(&smf, 2);
-    assert!(t1.iter().any(|&v| v > 0), "track 1 should have audible notes");
+    assert!(
+        t1.iter().any(|&v| v > 0),
+        "track 1 should have audible notes"
+    );
     assert!(!t2.is_empty(), "track 2 should still have note events");
     assert!(
         t2.iter().all(|&v| v == 0),

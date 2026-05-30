@@ -220,7 +220,11 @@ fn render_svg_measure_range_returns_svg_payload() {
         "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c/4d/4e\n@end:s\n";
     let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
     let svg = tk.render_svg_measure_range(1, 2, "\n").unwrap();
-    assert!(svg.contains("<svg"), "expected SVG content, got {} bytes", svg.len());
+    assert!(
+        svg.contains("<svg"),
+        "expected SVG content, got {} bytes",
+        svg.len()
+    );
 }
 
 #[test]

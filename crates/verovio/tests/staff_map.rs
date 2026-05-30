@@ -80,8 +80,7 @@ fn staff_map_unloaded_doc_errors_via_render_path() {
     // We expect *some* failure since pages = 0; if Toolkit::staff_map
     // somehow returns Ok with an empty map, that's also a valid contract
     // (no pages means no staves to walk).
-    match res {
-        Ok(map) => assert!(map.is_empty(), "no doc loaded → empty staff_map"),
-        Err(_) => {} // also acceptable
+    if let Ok(map) = res {
+        assert!(map.is_empty(), "no doc loaded → empty staff_map");
     }
 }

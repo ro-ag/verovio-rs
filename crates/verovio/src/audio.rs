@@ -140,7 +140,7 @@ pub fn pcm_to_wav(pcm: &Pcm) -> Vec<u8> {
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&block_align.to_le_bytes());
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    // data chunk
+                                                 // data chunk
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_size.to_le_bytes());
     for i in 0..n {

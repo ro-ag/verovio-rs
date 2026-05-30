@@ -64,6 +64,7 @@ pub mod gm {
     //! show "Program 1" should add 1 at display time.
     //!
     //! Source: General MIDI Level 1 spec (MMA, 1991).
+    #[rustfmt::skip]
     const PROGRAMS: [&str; 128] = [
         "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano",
         "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavi",
@@ -111,8 +112,9 @@ pub mod gm {
         &PROGRAMS
     }
 
-    const NOTE_NAMES_SHARP: [&str; 12] =
-        ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const NOTE_NAMES_SHARP: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
 
     /// Pitch name for a MIDI key number in scientific pitch notation
     /// ("C-1" through "G9"). MIDI key 60 = "C4" (middle C). Returns
@@ -470,7 +472,7 @@ fn absolute_ticks<'a>(track: &[TrackEvent<'a>]) -> Vec<(u64, TrackEventKind<'a>)
     let mut tick: u64 = 0;
     for ev in track {
         tick += u32::from(ev.delta) as u64;
-        out.push((tick, ev.kind.clone()));
+        out.push((tick, ev.kind));
     }
     out
 }
@@ -575,8 +577,7 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
             let mut events_abs = absolute_ticks(meta_track);
             for (q, text) in lyrics {
                 let tick = (q * tpq as f64).round().max(0.0) as u64;
-                let label: &'static [u8] =
-                    Box::leak(text.clone().into_bytes().into_boxed_slice());
+                let label: &'static [u8] = Box::leak(text.clone().into_bytes().into_boxed_slice());
                 events_abs.push((tick, TrackEventKind::Meta(MetaMessage::Lyric(label))));
             }
             events_abs.sort_by_key(|(t, _)| *t);
@@ -588,8 +589,7 @@ fn apply_policy_to_parsed<'a>(mut smf: Smf<'a>, policy: &MidiTrackPolicy) -> Smf
             let mut events_abs = absolute_ticks(meta_track);
             for (q, text) in cues {
                 let tick = (q * tpq as f64).round().max(0.0) as u64;
-                let label: &'static [u8] =
-                    Box::leak(text.clone().into_bytes().into_boxed_slice());
+                let label: &'static [u8] = Box::leak(text.clone().into_bytes().into_boxed_slice());
                 events_abs.push((tick, TrackEventKind::Meta(MetaMessage::CuePoint(label))));
             }
             events_abs.sort_by_key(|(t, _)| *t);
@@ -915,22 +915,47 @@ pub struct TimedEvent {
 /// parsed SMF buffer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TimedMessage {
-    NoteOn { key: u8, vel: u8 },
-    NoteOff { key: u8, vel: u8 },
-    Aftertouch { key: u8, vel: u8 },
-    Controller { controller: u8, value: u8 },
-    ProgramChange { program: u8 },
-    ChannelAftertouch { vel: u8 },
-    PitchBend { value: i16 },
+    NoteOn {
+        key: u8,
+        vel: u8,
+    },
+    NoteOff {
+        key: u8,
+        vel: u8,
+    },
+    Aftertouch {
+        key: u8,
+        vel: u8,
+    },
+    Controller {
+        controller: u8,
+        value: u8,
+    },
+    ProgramChange {
+        program: u8,
+    },
+    ChannelAftertouch {
+        vel: u8,
+    },
+    PitchBend {
+        value: i16,
+    },
     /// Tempo change in microseconds-per-quarter (SMF native unit).
     /// Convert to BPM with `60_000_000.0 / usec_per_quarter as f64`.
-    Tempo { usec_per_quarter: u32 },
+    Tempo {
+        usec_per_quarter: u32,
+    },
     /// Other meta events (text, marker, lyric, time-sig, key-sig, …)
     /// surfaced as an opaque kind byte and payload. Convert in the caller
     /// if needed.
-    Meta { kind: u8, data: Vec<u8> },
+    Meta {
+        kind: u8,
+        data: Vec<u8>,
+    },
     /// SysEx or escape sysex; payload is the raw bytes after F0.
-    SysEx { data: Vec<u8> },
+    SysEx {
+        data: Vec<u8>,
+    },
 }
 
 /// Convert a Verovio-rendered SMF (or any Format-0/1 SMF) into a flat,
@@ -987,10 +1012,7 @@ pub fn iter_smf_events(smf_bytes: &[u8]) -> Option<Vec<TimedEvent>> {
         let mut ms = 0.0;
         for i in 0..tempo_points.len() {
             let (seg_start, usec_per_q) = tempo_points[i];
-            let seg_end = tempo_points
-                .get(i + 1)
-                .map(|(t, _)| *t)
-                .unwrap_or(u64::MAX);
+            let seg_end = tempo_points.get(i + 1).map(|(t, _)| *t).unwrap_or(u64::MAX);
             if target <= seg_start {
                 break;
             }
@@ -1034,9 +1056,9 @@ pub fn iter_smf_events(smf_bytes: &[u8]) -> Option<Vec<TimedEvent>> {
                         MidiMessage::ProgramChange { program } => TimedMessage::ProgramChange {
                             program: program.as_int(),
                         },
-                        MidiMessage::ChannelAftertouch { vel } => TimedMessage::ChannelAftertouch {
-                            vel: vel.as_int(),
-                        },
+                        MidiMessage::ChannelAftertouch { vel } => {
+                            TimedMessage::ChannelAftertouch { vel: vel.as_int() }
+                        }
                         MidiMessage::PitchBend { bend } => TimedMessage::PitchBend {
                             value: bend.0.as_int() as i16 - 8192,
                         },
@@ -1087,7 +1109,11 @@ pub fn iter_smf_events(smf_bytes: &[u8]) -> Option<Vec<TimedEvent>> {
     }
     // Stable sort by onset time so concurrent events on different tracks
     // interleave deterministically.
-    out.sort_by(|a, b| a.at_ms.partial_cmp(&b.at_ms).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        a.at_ms
+            .partial_cmp(&b.at_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Some(out)
 }
 
@@ -1148,10 +1174,8 @@ pub fn summarize(smf_bytes: &[u8]) -> Option<Vec<TrackInfo>> {
                     MidiMessage::NoteOn { vel, .. } if vel.as_int() > 0 => {
                         audible_note_count += 1;
                     }
-                    MidiMessage::ProgramChange { program: p } => {
-                        if program.is_none() {
-                            program = Some(p.as_int());
-                        }
+                    MidiMessage::ProgramChange { program: p } if program.is_none() => {
+                        program = Some(p.as_int());
                     }
                     MidiMessage::Controller { controller, value } => match controller.as_int() {
                         7 if volume.is_none() => volume = Some(value.as_int()),

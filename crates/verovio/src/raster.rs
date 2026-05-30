@@ -101,7 +101,9 @@ pub fn svgs_to_pdf(svgs: &[String]) -> crate::Result<Vec<u8>> {
     pdf.catalog(catalog_ref).pages(page_tree_ref);
     {
         let mut pages = pdf.pages(page_tree_ref);
-        pages.count(svgs.len() as i32).kids(page_refs.iter().copied());
+        pages
+            .count(svgs.len() as i32)
+            .kids(page_refs.iter().copied());
         pages.finish();
     }
 
@@ -110,9 +112,8 @@ pub fn svgs_to_pdf(svgs: &[String]) -> crate::Result<Vec<u8>> {
     for (i, svg) in svgs.iter().enumerate() {
         let tree = Tree::from_str(svg, &Options::default())
             .map_err(|e| crate::Error::Xml(format!("usvg parse page {}: {e}", i + 1)))?;
-        let (chunk, svg_id) =
-            svg2pdf::to_chunk(&tree, svg2pdf::ConversionOptions::default())
-                .map_err(|e| crate::Error::Xml(format!("svg2pdf chunk page {}: {e}", i + 1)))?;
+        let (chunk, svg_id) = svg2pdf::to_chunk(&tree, svg2pdf::ConversionOptions::default())
+            .map_err(|e| crate::Error::Xml(format!("svg2pdf chunk page {}: {e}", i + 1)))?;
 
         // Renumber every ref in the chunk into our global allocator.
         let mut remap = HashMap::new();

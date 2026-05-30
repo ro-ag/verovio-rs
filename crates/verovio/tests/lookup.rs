@@ -344,8 +344,7 @@ fn chord_at_returns_last_onset_group() {
 #[test]
 fn chord_at_before_first_onset_is_empty() {
     use verovio::lookup::chord_at;
-    const PAE: &str =
-        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
+    const PAE: &str = "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
     let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
     let tm = tk.timemap().unwrap();
     assert!(chord_at(&tm, -100.0).is_empty());
@@ -369,8 +368,7 @@ fn note_duration_locates_on_then_off() {
 #[test]
 fn note_duration_unknown_id_returns_none() {
     use verovio::lookup::note_duration;
-    const PAE: &str =
-        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
+    const PAE: &str = "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
     let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
     let tm = tk.timemap().unwrap();
     assert!(note_duration(&tm, "no-such-id").is_none());
