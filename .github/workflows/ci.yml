@@ -6,29 +6,31 @@ on:
   pull_request:
     branches: [main]
 
+# Supported targets: macOS (native) and NixOS (via nix-shell on a Linux
+# runner — GitHub doesn't offer NixOS runners, but `shell.nix` produces
+# the same toolchain we develop against). A bare-ubuntu job would be
+# redundant: every interesting compiler / linker / sanitizer surface is
+# the same one a NixOS developer would run locally, and that's exactly
+# what test-nix exercises.
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # sccache is intentionally NOT enabled at the workflow level. The GitHub
-  # Actions cache backend that sccache talks to (`artifactcache.actions
-  # .githubusercontent.com`) returns transient HTTP 400 errors which hard-fail
-  # sccache at startup and break the whole build. Swatinem/rust-cache below
-  # is enough for cargo registry + fingerprint caching; mold (Linux) handles
-  # link-time speedup. Local dev keeps sccache via shell.nix where the local
-  # filesystem cache backend has no such reliability issue.
+  # Actions cache backend that sccache talks to returns transient HTTP 400
+  # errors that hard-fail sccache at startup. Swatinem/rust-cache below
+  # handles cargo registry + fingerprint caching; mold (Linux) handles
+  # link-time speedup. Local dev keeps sccache via shell.nix where the
+  # local filesystem cache backend has no such reliability issue.
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  test-macos:
+    name: test (macos-latest)
+    runs-on: macos-latest
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -37,20 +39,10 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Cargo registry + git deps + target fingerprints. The heavy
-      # libverovio.a artifact isn't covered — it gets rebuilt each CI run.
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ${{ matrix.os }}
-
-      - name: Install mold (Linux only)
-        if: runner.os == 'Linux'
-        uses: rui314/setup-mold@v1
-
-      - name: Use mold as Rust linker (Linux only)
-        if: runner.os == 'Linux'
-        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
+          shared-key: macos-latest
 
       - name: cargo fmt --check
         run: cargo fmt --all --check
@@ -65,17 +57,17 @@ jobs:
         run: cargo test --workspace --verbose
 
   test-nix:
-    name: test (nix-shell — dev env fidelity)
+    name: test (nix-shell — NixOS dev env)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v30
+        uses: cachix/install-nix-action@v32
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
@@ -100,21 +92,23 @@ jobs:
         run: nix-shell --run "cargo test --workspace --verbose"
 
       - name: sccache stats
-        run: nix-shell --run "sccache --show-stats"
         if: always()
+        run: nix-shell --run "sccache --show-stats"
 
   sanitize:
-    name: sanitize (ASan + UBSan, ubuntu)
+    name: sanitize (ASan + UBSan, nix-shell)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Nix
+        uses: cachix/install-nix-action@v32
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@v2
@@ -137,4 +131,5 @@ jobs:
           # LSan report at process exit.
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
-        run: cargo test --workspace --features verovio/sanitize --verbose
+        run: |
+          nix-shell --run "cargo test --workspace --features verovio/sanitize --verbose"
