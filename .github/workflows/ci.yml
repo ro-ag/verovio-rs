@@ -124,8 +124,9 @@ jobs:
       # don't combine cleanly; default ld is fast enough for one job.
       #
       # shell.nix doesn't include compiler-rt (UBSan runtime ships as a
-      # separate nixpkgs derivation, not bundled with clang). Without it,
-      # the link fails with "undefined symbol: __ubsan_vptr_type_cache".
+      # separate nixpkgs derivation, not bundled with clang) or lld (also
+      # a separate derivation in nixpkgs — clang can't find it via PATH
+      # alone, fails with "invalid linker name in argument '-fuse-ld=lld'").
       # Extend the dev shell on the fly with `-E` so this stays a CI-only
       # concern — local sanitizer builds are not in shell.nix's contract.
       # RUSTFLAGS is set inside --run because shell.nix exports its own
@@ -140,5 +141,5 @@ jobs:
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: |
-          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt ]; })" \
+          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" \
             --run "unset RUSTC_WRAPPER CC CXX; export RUSTFLAGS='-C linker=clang -C link-arg=-fuse-ld=lld'; cargo test --workspace --features verovio/sanitize --verbose"
