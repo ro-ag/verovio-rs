@@ -1,14 +1,15 @@
 # verovio-rs
 
-Rust bindings to [Verovio](https://www.verovio.org/), RISM's C++ music
-notation engraving library. Loads MusicXML / MEI / Humdrum / ABC / PAE,
-produces SVG, and exposes the timemap Verovio uses to sync playback to
-notation.
+Safe Rust bindings to [Verovio](https://www.verovio.org/), RISM's C++
+music notation engraving library. Loads MusicXML / MEI / Humdrum / ABC /
+PAE; renders SVG / PNG / single- and multi-page PDF; produces SMF MIDI
+with full multi-track playback control; synthesizes offline WAV via
+SoundFont; exposes the timemap, tempo map, measure timeline, bbox map,
+and score metadata for syncing UI to playback.
 
-> **Status: pre-1.0, pre-publish.** API surface is small and focused on
-> what the parent project [`xpart`](https://github.com/ro-ag/xpart)
-> needs. Methods are added when they're consumed, not preemptively. Not
-> yet published to crates.io.
+> **Status: pre-1.0, pre-publish.** Feature-complete for read+play
+> workflows; MEI editing is the only remaining frontier. Not yet
+> published to crates.io.
 
 ## Crates
 
@@ -25,13 +26,13 @@ use verovio::Toolkit;
 
 let mut tk = Toolkit::new();
 tk.load_data(r#"
-@start:clefs
+@start:demo
 @clef:G-2
 @keysig:xF
 @key:
 @timesig:
 @data:'4G/4-
-@end:clefs
+@end:demo
 "#)?;
 
 for page in 1..=tk.page_count() {
@@ -39,12 +40,87 @@ for page in 1..=tk.page_count() {
     // … write svg to disk, or render in a UI
 }
 
-// Playhead-sync timemap (JSON):
-let timemap = tk.render_to_timemap()?;
+// Playhead-sync timemap, typed:
+let timemap: Vec<verovio::TimemapEvent> = tk.timemap()?;
+
+// Score header metadata extracted from the loaded MEI/MusicXML:
+let metadata = tk.metadata()?;
+println!("{:?} by {:?}", metadata.title, metadata.composer);
+
+// Pixel-rect map for click-to-seek and highlight overlays:
+let bboxes = tk.bbox_map()?;
+# Ok::<(), verovio::Error>(())
 ```
 
-Buffer-reuse variants (`render_to_svg_into(&mut String)` etc.) are
-available on every allocating method for tight render loops.
+Buffer-reuse variants (`render_to_svg_into(&mut String)`) and
+streaming-shape writers (`render_to_svg_writer(&mut w)`) are available
+on every allocating method.
+
+## Feature matrix
+
+All features are off by default.
+
+### Render / export
+
+| Feature | Adds                                  | Use when |
+|---------|---------------------------------------|----------|
+| `png`   | `dep:resvg`                           | Rasterize a page to PNG bytes |
+| `pdf`   | `dep:svg2pdf`, `dep:pdf-writer`       | Single- or multi-page PDF assembly |
+
+### Audio
+
+| Feature       | Adds                          | Use when |
+|---------------|-------------------------------|----------|
+| `audio`       | `dep:rustysynth`              | Offline PCM/WAV from a SoundFont |
+| `live-audio`  | `audio` + `dep:cpal`          | Drive the OS audio device (example only) |
+
+### Sanitizers (C++ side)
+
+| Feature           | Adds to the C++ build                                  |
+|-------------------|--------------------------------------------------------|
+| `sanitize`        | `-fsanitize=address,undefined -fno-omit-frame-pointer` |
+| `sanitize-thread` | `-fsanitize=thread -fno-omit-frame-pointer`            |
+
+Mutually exclusive — `build.rs` panics if both are enabled. See the
+[Building wiki page](https://github.com/ro-ag/verovio-rs/wiki/Building#sanitizers)
+for the `RUSTFLAGS` invocation needed on stable Rust.
+
+```toml
+verovio = { version = "0.1", features = ["png", "pdf", "audio"] }
+```
+
+## What this binding does
+
+| Surface | API |
+|---|---|
+| SVG render | `render_to_svg`, `render_to_svg_into`, `render_to_svg_writer`, `render_svg_measure_range` |
+| PNG render | `render_to_png`, `render_to_png_all_pages` (`png` feature) |
+| PDF render | `render_to_pdf`, `render_to_pdf_all_pages` (`pdf` feature) |
+| MIDI render | `render_to_midi_bytes`, `render_to_midi_bytes_with_policy`, `render_to_midi_writer` |
+| MIDI policy | `MidiTrackPolicy` with channel / program / volume / pan / mute / sustain / transpose / expression / modulation / reverb / chorus / bank / port / track-name / instrument-name / time-sig / key-sig / tempo-curve / lyrics / cue points / measure markers |
+| MIDI helpers | `iter_smf_events`, `summarize`, `build_panic_smf`, `gm::{program_name, drum_key_name, note_name, midi_key_from_name}` |
+| Audio render | `render_to_wav`, `render_to_pcm`, `render_to_wav_with_policy` (`audio` feature) |
+| Audio live | `examples/live_playback.rs` (`live-audio` feature, cpal-based) |
+| Timemap | `timemap`, `timemap_exact`, `render_to_timemap`, `elements_at_time` |
+| Tempo | `TempoMap` with `qstamp_to_ms`, `ms_to_qstamp`, `bpm_at_qstamp`, `bpm_at_ms`, `scaled` |
+| Cursors | `PlaybackCursor` (monotonic, amortized O(1)), `LoopCursor` (`[start, end)` wrap) |
+| Lookup | `sounding_at`, `chord_at`, `note_duration`, `events_in_range`, `next_event_after`, `prev_event_before`, `measure_by_id`, … |
+| Score reading | `metadata`, `measures`, `staff_map`, **`bbox_map`** (click-to-seek + highlight rects), `classified_elements`, `expansion_map` |
+| Layout setters | `set_font`, `set_zoom`, `set_page_size`, `set_breaks`, `set_landscape`, `option_value` |
+| Styling | `styling::stripe_tracks_by_id`, `styling::fade_others` (CSS class generators) |
+| Log | `set_log_level` (mutex-gated) |
+
+## Documentation
+
+- **API reference**: `cargo doc --open` from the workspace root
+- **Long-form docs**: [Wiki](https://github.com/ro-ag/verovio-rs/wiki)
+  — Quick Start, Features, Rendering, MIDI Playback, Audio, Score
+  Reading, Concurrency, Building
+- **Examples**: `cargo run -p verovio --example <name>`
+  - `render_to_file` — basic SVG-per-page
+  - `playback_simulation` — timemap-driven highlight loop
+  - `render_to_midi` — multi-track policy in action
+  - `live_playback` — cpal + rustysynth (`live-audio` feature)
 
 ## Platforms
 
@@ -54,10 +130,9 @@ and the FFI surface much simpler.
 
 ## Build requirements
 
-A working C++20 toolchain (clang or gcc 11+) and a Rust 1.85+ stable
-toolchain. The Verovio C++ source is vendored as a git submodule and
-built from source via `cc::Build` — no `cmake`, no system `verovio`
-required.
+A working C++20 toolchain (clang 14+ or gcc 11+) and Rust 1.85+ stable.
+The Verovio C++ source is vendored as a git submodule and built via
+`cc::Build` — no `cmake`, no system `verovio` required.
 
 ```sh
 git clone --recurse-submodules https://github.com/ro-ag/verovio-rs
@@ -66,54 +141,35 @@ cargo test
 ```
 
 First clean build takes ~6 minutes (295 C++ files in `-O0` + debug
-info); subsequent incremental builds are seconds.
+info); subsequent incremental builds are seconds. See the [Building
+wiki page](https://github.com/ro-ag/verovio-rs/wiki/Building) for
+NixOS, sanitizers, and troubleshooting.
 
 ### NixOS
 
-`shell.nix` provides the toolchain plus `sccache` (compiler cache) and
-`mold` (fast linker). Enter once with `nix-shell`; a clean rebuild after
-`cargo clean` then completes in under a minute on a warm sccache.
+`shell.nix` provides the toolchain plus `sccache` and `mold`:
 
 ```sh
 nix-shell
 cargo test
 ```
 
-## Sanitizers
-
-Two cargo features instrument the C++ build for runtime sanitization:
-
-| Feature           | Adds to the C++ build                            |
-| ----------------- | ------------------------------------------------ |
-| `sanitize`        | `-fsanitize=address,undefined -fno-omit-frame-pointer` |
-| `sanitize-thread` | `-fsanitize=thread -fno-omit-frame-pointer`      |
-
-The two are mutually exclusive (libsanitizer runtimes can't coexist);
-`build.rs` panics if both are enabled.
-
-On stable Rust the default linker (`rust-lld`) doesn't translate
-`-fsanitize=…` into the matching runtime link. To run sanitizer tests
-locally, force `clang` as the linker driver:
-
-```sh
-RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld" \
-ASAN_OPTIONS="halt_on_error=1:abort_on_error=1:detect_leaks=0" \
-    cargo test --features verovio/sanitize
-```
-
-CI's `sanitize` job (ubuntu-latest) does the same automatically.
+For the `live-audio` example, also pull `alsa-lib` and `pkg-config`
+(see [Audio wiki page](https://github.com/ro-ag/verovio-rs/wiki/Audio)).
 
 ## Thread safety
 
 `Toolkit: Send + !Sync`. Verovio's render and layout methods mutate
-internal state even when shaped as `const`; sharing a `&Toolkit` between
-threads would be unsound. For concurrent rendering, construct one
-`Toolkit` per thread or use a single worker thread fronted by a channel.
+internal state even when shaped as `const`; sharing a `&Toolkit`
+between threads would be unsound. For concurrent rendering: one
+`Toolkit` per thread, or a single worker thread fronted by a channel.
 
 The crate deliberately omits a few upstream surfaces that touch
-process-global state — Humdrum methods, the log toggle, `SetLocale` —
-because those would break the `Send` guarantee. Add them only with
-matching mutex/serialization, never as bare bindings.
+process-global state — Humdrum methods, `SetLocale`, the unmutexed log
+toggle — because those would break the `Send` guarantee. See the
+[Concurrency wiki page](https://github.com/ro-ag/verovio-rs/wiki/Concurrency)
+for the full TSan audit (8 races, all upstream, none observable in our
+tests).
 
 ## License
 
@@ -121,8 +177,8 @@ matching mutex/serialization, never as bare bindings.
 upstream Verovio library. The vendored Verovio source tree is a mix of
 LGPL-3.0 (Verovio itself) and permissive licenses for individual
 dependencies (pugixml MIT, jsonxx MIT, humlib BSD-2-Clause, midifile
-BSD-2-Clause, miniz-cpp MIT, crc public domain). All are compatible with
-LGPL-3.0 downstream.
+BSD-2-Clause, miniz-cpp MIT, crc public domain). All are compatible
+with LGPL-3.0 downstream.
 
 ## Acknowledgements
 
@@ -133,3 +189,5 @@ LGPL-3.0 downstream.
   tarball-pinning patterns.
 - [`cxx`](https://github.com/dtolnay/cxx) — the Rust ↔ C++ binding
   generator this crate is built on.
+- [`rustysynth`](https://github.com/sinshu/rustysynth) — pure-Rust
+  SoundFont synthesizer used behind the `audio` feature.

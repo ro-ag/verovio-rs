@@ -10,6 +10,9 @@ GEMINI.md
 **/*.rs.bk
 Cargo.lock
 
+# GitHub wiki — independent repo cloned alongside; not part of this tree
+/wiki/
+
 # Editors / OS
 .idea/
 .vscode/
