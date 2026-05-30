@@ -131,6 +131,15 @@ jobs:
       # concern — local sanitizer builds are not in shell.nix's contract.
       # RUSTFLAGS is set inside --run because shell.nix exports its own
       # RUSTFLAGS and that overrides any workflow-level `env:` entry.
+      # Build and run must both happen inside the *same* nix-shell. A single
+      # `cargo test` already does that, but on this Ubuntu runner the produced
+      # binary was binding to the host `/lib/x86_64-linux-gnu/libc.so.6` at
+      # exec time and dying with `undefined symbol: __nptl_change_stack_perm,
+      # version GLIBC_PRIVATE` before any test ran — a mismatch between the
+      # Nix-toolchain-linked sanitizer runtime and the host glibc. Splitting
+      # into `cargo test --no-run` + `cargo test` inside one nix-shell makes
+      # the build/run boundary explicit and keeps both phases under the same
+      # toolchain + runtime.
       - name: cargo test (sanitize)
         env:
           # Make ASan failures fatal but readable; halt-on-error keeps the
@@ -141,5 +150,11 @@ jobs:
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: |
-          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" \
-            --run "unset RUSTC_WRAPPER CC CXX; export RUSTFLAGS='-C linker=clang -C link-arg=-fuse-ld=lld'; cargo test --workspace --features verovio/sanitize --verbose"
+          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" --run '
+            unset RUSTC_WRAPPER CC CXX
+            export RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld"
+
+            cargo test --workspace --features verovio/sanitize --no-run --verbose
+
+            cargo test --workspace --features verovio/sanitize --verbose
+          '
