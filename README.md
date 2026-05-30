@@ -46,6 +46,24 @@ verovio = { path = "../verovio-rs/crates/verovio" }
 verovio = { path = "../verovio-rs/crates/verovio", features = ["png", "pdf", "audio"] }
 ```
 
+### NixOS consumers — libstdc++ at runtime
+
+Binaries built by *your* crate against `verovio` need to find
+`libstdc++.so.6` at runtime. NixOS doesn't have it at any FHS path, so
+either run inside `nix-shell` (sets `LD_LIBRARY_PATH` for you) or
+expose it explicitly:
+
+```sh
+LD_LIBRARY_PATH="$(dirname $(c++ -print-file-name=libstdc++.so.6))" \
+    ./target/release/your-binary
+```
+
+The `verovio-sys` build script emits an rpath for its own
+tests/benches, but Cargo's `rustc-link-arg` only propagates within the
+emitting package — your crate's binaries aren't affected. On
+Linux/macOS with FHS paths this is a non-issue (the standard library
+search path resolves `libstdc++.so.6` directly).
+
 ### Why not `cargo add --git`?
 
 Cargo's git-dependency resolver does **not** initialize submodules by
