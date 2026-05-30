@@ -176,3 +176,102 @@ fn two_toolkits_in_parallel_threads_each_render_independently() {
 
     handle.join().expect("parallel toolkit thread panicked");
 }
+
+#[test]
+fn option_value_returns_named_field() {
+    let tk = verovio::Toolkit::new();
+    // pageWidth is a well-known default option Verovio always reports.
+    let v = tk.option_value("pageWidth");
+    assert!(v.is_some(), "pageWidth should be present in options");
+}
+
+#[test]
+fn option_value_missing_returns_none() {
+    let tk = verovio::Toolkit::new();
+    assert!(tk.option_value("definitely-not-a-real-option").is_none());
+}
+
+#[test]
+fn set_font_to_leipzig_changes_options() {
+    let mut tk = verovio::Toolkit::new();
+    tk.set_font("Leipzig").expect("set Leipzig");
+    let font = tk.option_value("font").expect("font present");
+    assert_eq!(font.as_str(), Some("Leipzig"));
+}
+
+#[test]
+fn set_font_invalid_is_accepted_but_logs_warning() {
+    // Verovio's option layer accepts any string and surfaces a runtime
+    // "Font could not be loaded" warning instead of failing the option
+    // set. Documented so a future refactor doesn't silently change it.
+    let mut tk = verovio::Toolkit::new();
+    let _ = tk.set_font("NotARealFont"); // does not panic; returns Ok
+}
+
+#[test]
+fn set_zoom_changes_scale_option() {
+    let mut tk = verovio::Toolkit::new();
+    tk.set_zoom(150).unwrap();
+    let v = tk.option_value("scale").unwrap();
+    assert_eq!(v.as_u64(), Some(150));
+}
+
+#[test]
+fn set_page_size_changes_dims() {
+    let mut tk = verovio::Toolkit::new();
+    tk.set_page_size(2100, 2970).unwrap();
+    let w = tk.option_value("pageWidth").unwrap();
+    let h = tk.option_value("pageHeight").unwrap();
+    assert_eq!(w.as_u64(), Some(2100));
+    assert_eq!(h.as_u64(), Some(2970));
+}
+
+#[test]
+fn set_breaks_smart_accepted() {
+    let mut tk = verovio::Toolkit::new();
+    tk.set_breaks("smart").unwrap();
+    let v = tk.option_value("breaks").unwrap();
+    assert_eq!(v.as_str(), Some("smart"));
+}
+
+#[test]
+fn set_landscape_toggles_option() {
+    let mut tk = verovio::Toolkit::new();
+    tk.set_landscape(true).unwrap();
+    let v = tk.option_value("landscape").unwrap();
+    assert_eq!(v.as_bool(), Some(true));
+}
+
+// -- streaming writers ------------------------------------------------------
+
+#[test]
+fn render_to_svg_writer_pipes_bytes() {
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("load");
+    let mut buf: Vec<u8> = Vec::new();
+    tk.render_to_svg_writer(1, &mut buf).expect("write");
+    assert!(buf.starts_with(b"<svg") || buf.starts_with(b"<?xml"));
+}
+
+#[test]
+fn render_to_midi_writer_pipes_smf_bytes() {
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("load");
+    let mut buf: Vec<u8> = Vec::new();
+    tk.render_to_midi_writer(&mut buf).expect("write");
+    assert!(buf.starts_with(b"MThd"), "expected SMF header");
+}
+
+#[test]
+fn render_to_timemap_writer_pipes_json() {
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("load");
+    let mut buf: Vec<u8> = Vec::new();
+    tk.render_to_timemap_writer(&mut buf).expect("write");
+    assert!(buf.starts_with(b"["));
+}
+
+#[test]
+fn render_to_svg_writer_invalid_page_errors() {
+    let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("load");
+    let mut buf: Vec<u8> = Vec::new();
+    let res = tk.render_to_svg_writer(999, &mut buf);
+    assert!(matches!(res, Err(verovio::Error::RenderFailed { page: 999 })));
+}

@@ -7,6 +7,7 @@
 //! [`Error::RenderFailed`].
 
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -14,8 +15,8 @@ use cxx::UniquePtr;
 use verovio_sys::ffi;
 
 use crate::{
-    ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MeasureInfo, MidiOptions,
-    Result, SvgOptions, TempoMap, Timemap, TimemapEventExact,
+    BBox, ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MeasureInfo,
+    MidiOptions, Result, ScoreMetadata, SvgOptions, TempoMap, Timemap, TimemapEventExact,
 };
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
@@ -42,6 +43,12 @@ fn resource_path() -> &'static Path {
 /// that document. Construct one per score you want to engrave.
 pub struct Toolkit {
     inner: UniquePtr<ffi::Toolkit>,
+    /// Verbatim copy of the most recent `load_data` input, retained so
+    /// [`Self::metadata`] can parse title / composer / etc. out of the
+    /// original MEI or MusicXML — Verovio doesn't expose those through
+    /// the C++ Toolkit API. Memory cost: one extra `String` per loaded
+    /// score (~typical score: a few hundred KB).
+    last_loaded: Option<String>,
 }
 
 // SAFETY: `Toolkit` is `Send` only because this crate deliberately does *not*
@@ -81,7 +88,10 @@ impl Toolkit {
             .expect("Verovio resource path must be UTF-8");
         let ok = ffi::set_resource_path(inner.pin_mut(), path);
         assert!(ok, "Verovio rejected SetResourcePath({path})");
-        Self { inner }
+        Self {
+            inner,
+            last_loaded: None,
+        }
     }
 
     /// Construct a toolkit and load a score in one step. Equivalent to
@@ -111,6 +121,7 @@ impl Toolkit {
     /// Returns [`Error::LoadFailed`] if Verovio's parser rejects the input.
     pub fn load_data(&mut self, data: &str) -> Result<()> {
         if ffi::load_data(self.inner.pin_mut(), data) {
+            self.last_loaded = Some(data.to_string());
             Ok(())
         } else {
             Err(Error::LoadFailed)
@@ -156,10 +167,66 @@ impl Toolkit {
         ffi::get_default_options(&self.inner)
     }
 
+    /// Read a single option's value from the current option set, parsed
+    /// as a [`serde_json::Value`]. Returns `None` if the option doesn't
+    /// exist or the options JSON fails to parse.
+    ///
+    /// Convenience over parsing the full document yourself when you just
+    /// want to inspect one field — e.g. after a layout that may have
+    /// touched `pageWidth` / `pageHeight`.
+    pub fn option_value(&self, name: &str) -> Option<serde_json::Value> {
+        let json: serde_json::Value = serde_json::from_str(&self.options()).ok()?;
+        json.get(name).cloned()
+    }
+
     /// Apply MIDI-generation options via a typed wrapper. Convenience for
     /// users who don't want to assemble the JSON themselves.
     pub fn set_midi_options(&mut self, opts: &MidiOptions) -> Result<()> {
         self.set_options(&opts.to_json())
+    }
+
+    /// Switch the SMuFL engraving font. `font_name` must match one of the
+    /// bundled font directory names — see
+    /// [`verovio_data::AVAILABLE_FONTS`](https://docs.rs/verovio-data).
+    /// Verovio accepts any string and logs a runtime warning if the font
+    /// cannot be located; it does **not** report invalid font names as an
+    /// error from `set_options`.
+    ///
+    /// Triggers a layout pass via Verovio's option-change path; the next
+    /// render reflects the new font.
+    pub fn set_font(&mut self, font_name: &str) -> Result<()> {
+        let escaped = font_name.replace('"', "\\\"");
+        self.set_options(&format!(r#"{{"font": "{escaped}"}}"#))
+    }
+
+    /// Convenience over `set_options({"scale": pct})`. `pct` is a percent
+    /// (`100` = 1x, `200` = 2x). Affects subsequent SVG render output
+    /// dimensions.
+    pub fn set_zoom(&mut self, pct: u32) -> Result<()> {
+        self.set_options(&format!(r#"{{"scale": {pct}}}"#))
+    }
+
+    /// Convenience over `set_options({"pageWidth": w, "pageHeight": h})`.
+    /// Values are in Verovio's internal units (mm × 10 typically — see
+    /// `default_options()` for the schema).
+    pub fn set_page_size(&mut self, width: u32, height: u32) -> Result<()> {
+        self.set_options(&format!(
+            r#"{{"pageWidth": {width}, "pageHeight": {height}}}"#
+        ))
+    }
+
+    /// Set Verovio's layout `breaks` option — one of `"auto"`,
+    /// `"none"`, `"encoded"`, `"smart"`, `"line"`. Other strings will
+    /// be rejected by Verovio.
+    pub fn set_breaks(&mut self, mode: &str) -> Result<()> {
+        let escaped = mode.replace('"', "\\\"");
+        self.set_options(&format!(r#"{{"breaks": "{escaped}"}}"#))
+    }
+
+    /// Convenience over `set_options({"landscape": bool})`. Swaps page
+    /// dimensions on the next layout pass.
+    pub fn set_landscape(&mut self, landscape: bool) -> Result<()> {
+        self.set_options(&format!(r#"{{"landscape": {landscape}}}"#))
     }
 
     /// Apply SVG-rendering options via a typed wrapper. The headline use
@@ -194,6 +261,45 @@ impl Toolkit {
             return Err(Error::RenderFailed { page });
         }
         Ok(ffi::render_to_svg(self.inner.pin_mut(), page as i32, false))
+    }
+
+    /// Render a single page to SVG and write the bytes into `w`. Saves
+    /// the caller's intermediate allocation when piping to a file or
+    /// socket — call this instead of holding the full `String` in memory.
+    ///
+    /// **Honesty disclaimer:** Verovio's `RenderToSVG` only returns
+    /// `std::string` (no `std::ostream&` overload upstream), so the C++
+    /// side allocates and holds the full page in memory before this
+    /// function copies it to `w`. The savings are on the **Rust side**:
+    /// no `String` is held by the caller. Upstream streaming would
+    /// require a Verovio PR adding `RenderToSVG(std::ostream&)`; tracked
+    /// in `project-safety-contract` memory.
+    pub fn render_to_svg_writer<W: io::Write>(&mut self, page: u32, w: &mut W) -> Result<()> {
+        if page == 0 || page > self.page_count() {
+            return Err(Error::RenderFailed { page });
+        }
+        let svg = ffi::render_to_svg(self.inner.pin_mut(), page as i32, false);
+        w.write_all(svg.as_bytes())?;
+        Ok(())
+    }
+
+    /// Render to MIDI (raw SMF bytes, base64-decoded) and write to `w`.
+    /// Same disclaimer as [`Self::render_to_svg_writer`].
+    pub fn render_to_midi_writer<W: io::Write>(&mut self, w: &mut W) -> Result<()> {
+        let bytes = self.render_to_midi_bytes()?;
+        w.write_all(&bytes)?;
+        Ok(())
+    }
+
+    /// Render the timemap as JSON and write to `w`. Same disclaimer as
+    /// [`Self::render_to_svg_writer`].
+    pub fn render_to_timemap_writer<W: io::Write>(&mut self, w: &mut W) -> Result<()> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let json = ffi::render_to_timemap(self.inner.pin_mut(), "");
+        w.write_all(json.as_bytes())?;
+        Ok(())
     }
 
     /// Render a single page to SVG, reusing the caller's buffer.
@@ -460,6 +566,40 @@ impl Toolkit {
         Ok(out)
     }
 
+    /// Build a side-table mapping every element ID in the rendered SVG to
+    /// its axis-aligned bounding box (in Verovio's SVG viewBox coordinate
+    /// system). Powers "click on note to seek" hit testing and
+    /// "highlight box around the playing note" overlays.
+    ///
+    /// # How the bbox is derived
+    ///
+    /// Walks every page's SVG with a `translate(x, y)` transform stack,
+    /// collecting coordinate samples from `<use>` glyph references and
+    /// `<path d="M x y L x y">` stem / barline / staff-line strokes. For
+    /// each `<g id="...">` boundary, the union of its descendants' sample
+    /// points becomes the bbox.
+    ///
+    /// **Accuracy contract**: the bbox covers anchor points and explicit
+    /// path coordinates. SMuFL glyph extents are approximated as a
+    /// `200 × 300` unit footprint around each `<use>` anchor (typical
+    /// notehead size — Bravura's noteheads are roughly this scale).
+    /// Good enough for hit testing and visible highlights; not pixel
+    /// perfect for layout debugging (use Verovio's
+    /// `svgBoundingBoxes` option for that).
+    ///
+    /// Cost: renders every page to SVG and parses it. Cacheable by the
+    /// consumer.
+    pub fn bbox_map(&mut self) -> Result<HashMap<String, BBox>> {
+        let mut out: HashMap<String, BBox> = HashMap::new();
+        let pages = self.page_count();
+        for page in 1..=pages {
+            let svg = self.render_to_svg(page)?;
+            let doc = roxmltree::Document::parse(&svg).map_err(|e| Error::Xml(e.to_string()))?;
+            walk_bbox(doc.root_element(), (0.0, 0.0), page, &mut out);
+        }
+        Ok(out)
+    }
+
     /// Build a side-table classifying every element ID that appears in the
     /// timemap by structural kind (note / chord / rest / measure). Returned
     /// `HashMap` supports O(1) lookup of "is this id a note?" — useful for
@@ -520,6 +660,46 @@ impl Toolkit {
     pub fn measure_at(&mut self, ms: f64) -> Result<Option<String>> {
         let events = self.timemap_exact()?;
         Ok(crate::lookup::measure_at_in(&events, ms).map(String::from))
+    }
+
+    /// Parse score-level metadata (title, composer, lyricist, copyright,
+    /// instrument labels) out of the originally loaded MEI or MusicXML.
+    /// Verovio's C++ Toolkit doesn't expose these — we parse them from
+    /// the verbatim input cached by [`Self::load_data`].
+    ///
+    /// Returns mostly-empty fields when the source format doesn't carry
+    /// the corresponding metadata: PAE, ABC, and Humdrum bodies have at
+    /// most a title or composer, where MEI / MusicXML carry the full
+    /// `<respStmt>` / `<identification>` set.
+    ///
+    /// Returns [`Error::LoadFailed`] if no document has been loaded yet.
+    pub fn metadata(&self) -> Result<ScoreMetadata> {
+        let src = self.last_loaded.as_deref().ok_or(Error::LoadFailed)?;
+        let trimmed = src.trim_start();
+        if looks_like_xml(trimmed) {
+            // MusicXML files routinely carry a DOCTYPE declaration;
+            // roxmltree refuses those by default for XXE-style safety.
+            // Score input is trusted here (the caller already handed it
+            // to Verovio), so opt in to DTD parsing.
+            let opts = roxmltree::ParsingOptions {
+                allow_dtd: true,
+                ..roxmltree::ParsingOptions::default()
+            };
+            let doc = roxmltree::Document::parse_with_options(src, opts)
+                .map_err(|e| Error::Xml(e.to_string()))?;
+            let root = doc.root_element();
+            let root_name = root.tag_name().name();
+            if root_name == "mei" {
+                Ok(parse_mei_metadata(&doc))
+            } else if root_name == "score-partwise" || root_name == "score-timewise" {
+                Ok(parse_musicxml_metadata(&doc))
+            } else {
+                Ok(ScoreMetadata::default())
+            }
+        } else {
+            // PAE / ABC / Humdrum — best-effort first-line scrape.
+            Ok(parse_plaintext_metadata(src))
+        }
     }
 
     /// Extract the tempo changes from the document as a [`TempoMap`] — the
@@ -589,10 +769,359 @@ impl Toolkit {
         let json = ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32);
         out.push_str(&json);
     }
+
+    /// Render every page that touches measures `from..=to` (1-indexed,
+    /// inclusive). Returns the rendered pages concatenated by `joiner`.
+    ///
+    /// Implementation: sets Verovio's `measureFrom` / `measureTo` options,
+    /// triggers a layout pass, renders the resulting pages, then restores
+    /// the previous options and re-lays out. One layout pass + N SVG
+    /// renders per call.
+    ///
+    /// `from == 0` or `from > to` returns `Ok(String::new())`. `to` past
+    /// the last measure is silently clamped by Verovio.
+    pub fn render_svg_measure_range(
+        &mut self,
+        from: u32,
+        to: u32,
+        joiner: &str,
+    ) -> Result<String> {
+        if from == 0 || from > to {
+            return Ok(String::new());
+        }
+        let saved_opts = self.options();
+        let scoped = format!(r#"{{"measureFrom": "{from}", "measureTo": "{to}"}}"#);
+        self.set_options(&scoped)?;
+        self.redo_layout();
+        let mut out = String::new();
+        let pages = self.page_count();
+        let mut buf = String::new();
+        for page in 1..=pages {
+            self.render_to_svg_into(page, &mut buf)?;
+            if !out.is_empty() {
+                out.push_str(joiner);
+            }
+            out.push_str(&buf);
+        }
+        // Best-effort restore — never swallow the render error to report
+        // a restore error.
+        let _ = self.set_options(&saved_opts);
+        self.redo_layout();
+        Ok(out)
+    }
 }
 
 impl Default for Toolkit {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Approximate SMuFL notehead / glyph footprint, in SVG viewBox units —
+/// used to give `<use>` references a non-zero bbox even though their
+/// glyph extents aren't carried in the rendered SVG.
+const GLYPH_HALF_W: f64 = 100.0;
+const GLYPH_HALF_H: f64 = 150.0;
+
+/// Recursively walk a Verovio SVG node, accumulating absolute
+/// coordinate samples from `<use>` and `<path>` descendants. At each
+/// `<g id="...">` boundary, record the bbox of its accumulated samples.
+/// Returns the sample list for the caller to fold into its own bbox.
+fn walk_bbox<'a>(
+    node: roxmltree::Node<'a, 'a>,
+    translate: (f64, f64),
+    page: u32,
+    out: &mut HashMap<String, BBox>,
+) -> Vec<(f64, f64)> {
+    let mut t = translate;
+    if let Some(s) = node.attribute("transform") {
+        if let Some((dx, dy)) = parse_translate(s) {
+            t.0 += dx;
+            t.1 += dy;
+        }
+    }
+
+    let mut samples: Vec<(f64, f64)> = Vec::new();
+    let tag = node.tag_name().name();
+
+    if tag == "use" {
+        // Per-element `x`/`y` attributes layered on top of the cumulative
+        // `transform`. Verovio emits glyphs almost always with the
+        // position in the transform, but the spec permits both.
+        let x = node
+            .attribute("x")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let y = node
+            .attribute("y")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let cx = t.0 + x;
+        let cy = t.1 + y;
+        samples.push((cx - GLYPH_HALF_W, cy - GLYPH_HALF_H));
+        samples.push((cx + GLYPH_HALF_W, cy + GLYPH_HALF_H));
+    } else if tag == "path" {
+        if let Some(d) = node.attribute("d") {
+            extract_path_points(d, t, &mut samples);
+        }
+    } else if tag == "rect" {
+        let x = node
+            .attribute("x")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let y = node
+            .attribute("y")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let w = node
+            .attribute("width")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let h = node
+            .attribute("height")
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
+        samples.push((t.0 + x, t.1 + y));
+        samples.push((t.0 + x + w, t.1 + y + h));
+    }
+
+    for child in node.children().filter(|c| c.is_element()) {
+        let child_samples = walk_bbox(child, t, page, out);
+        samples.extend(child_samples);
+    }
+
+    if let Some(id) = node.attribute("id") {
+        if !samples.is_empty() {
+            let (min_x, min_y, max_x, max_y) = bounds_of(&samples);
+            // `or_insert` — if the same id appears across pages (rare),
+            // keep the first occurrence so callers get a stable answer.
+            out.entry(id.to_string()).or_insert(BBox {
+                x: min_x,
+                y: min_y,
+                width: max_x - min_x,
+                height: max_y - min_y,
+                page,
+            });
+        }
+    }
+    samples
+}
+
+/// Parse a `transform="translate(x, y) …"` attribute, returning the
+/// translate component as `(dx, dy)`. Other transform fns (scale,
+/// rotate) are ignored — Verovio uses translate for layout positioning
+/// and scale for SMuFL glyph sizing (the latter doesn't move element
+/// anchors, just resizes the glyph in place).
+fn parse_translate(s: &str) -> Option<(f64, f64)> {
+    let start = s.find("translate")?;
+    let after = &s[start + "translate".len()..];
+    let open = after.find('(')?;
+    let close = after[open + 1..].find(')')?;
+    let inner = &after[open + 1..open + 1 + close];
+    let mut parts = inner.split(|c: char| c == ',' || c.is_whitespace());
+    let dx: f64 = parts.find(|s| !s.is_empty())?.parse().ok()?;
+    let dy: f64 = parts.find(|s| !s.is_empty()).unwrap_or("0").parse().ok()?;
+    Some((dx, dy))
+}
+
+/// Extract `(x, y)` coordinates from an SVG `d=` path attribute. Only
+/// honors `M` / `L` / `m` / `l` (move / line, abs/rel) — sufficient for
+/// Verovio's stems, barlines, staff lines, ledger lines, and beams,
+/// which are the only paths visible in a layout SVG (glyph paths live
+/// inside `<defs>` and don't carry layout coords).
+fn extract_path_points(d: &str, translate: (f64, f64), out: &mut Vec<(f64, f64)>) {
+    let mut last_abs = (0.0, 0.0);
+    let mut iter = d.split_whitespace().peekable();
+    while let Some(tok) = iter.next() {
+        let bytes = tok.as_bytes();
+        if bytes.is_empty() {
+            continue;
+        }
+        let first = bytes[0];
+        match first {
+            b'M' | b'L' => {
+                let rest = &tok[1..];
+                let x: f64 = if rest.is_empty() {
+                    iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                } else {
+                    rest.parse().unwrap_or(0.0)
+                };
+                let y: f64 = iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                last_abs = (x, y);
+                out.push((translate.0 + x, translate.1 + y));
+            }
+            b'm' | b'l' => {
+                let rest = &tok[1..];
+                let dx: f64 = if rest.is_empty() {
+                    iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                } else {
+                    rest.parse().unwrap_or(0.0)
+                };
+                let dy: f64 = iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push((translate.0 + last_abs.0, translate.1 + last_abs.1));
+            }
+            _ => {
+                // Other path commands (curves, arcs) — Verovio's layout
+                // SVG doesn't use these for engraved geometry, so skip.
+            }
+        }
+    }
+}
+
+fn looks_like_xml(s: &str) -> bool {
+    s.starts_with("<?xml") || s.starts_with("<mei") || s.starts_with("<score-partwise") || s.starts_with("<score-timewise") || s.starts_with("<!DOCTYPE")
+}
+
+fn parse_mei_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
+    let mut md = ScoreMetadata::default();
+    let root = doc.root_element();
+    for desc in root.descendants() {
+        if !desc.is_element() {
+            continue;
+        }
+        let name = desc.tag_name().name();
+        match name {
+            "title" => {
+                if md.title.is_none() {
+                    md.title = text_of(desc);
+                }
+            }
+            "persName" => {
+                let role = desc.attribute("role").unwrap_or("");
+                match role {
+                    "composer" if md.composer.is_none() => md.composer = text_of(desc),
+                    "lyricist" | "librettist" if md.lyricist.is_none() => {
+                        md.lyricist = text_of(desc)
+                    }
+                    "arranger" if md.arranger.is_none() => md.arranger = text_of(desc),
+                    _ => {}
+                }
+            }
+            "availability" | "useRestrict" => {
+                if md.copyright.is_none() {
+                    md.copyright = text_of(desc);
+                }
+            }
+            "label" => {
+                // staffDef labels — captured in document order; the
+                // staff number is on the parent staffDef's `n=` attr but
+                // not all MEI files carry it, so we accept order order.
+                if let Some(parent) = desc.parent() {
+                    let pname = parent.tag_name().name();
+                    if pname == "staffDef" {
+                        if let Some(t) = text_of(desc) {
+                            md.instruments.push(t);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    md
+}
+
+fn parse_musicxml_metadata(doc: &roxmltree::Document) -> ScoreMetadata {
+    let mut md = ScoreMetadata::default();
+    let root = doc.root_element();
+    for desc in root.descendants() {
+        if !desc.is_element() {
+            continue;
+        }
+        let name = desc.tag_name().name();
+        match name {
+            "work-title" => {
+                if md.title.is_none() {
+                    md.title = text_of(desc);
+                }
+            }
+            "creator" => {
+                let typ = desc.attribute("type").unwrap_or("");
+                match typ {
+                    "composer" if md.composer.is_none() => md.composer = text_of(desc),
+                    "lyricist" | "poet" if md.lyricist.is_none() => md.lyricist = text_of(desc),
+                    "arranger" if md.arranger.is_none() => md.arranger = text_of(desc),
+                    _ => {}
+                }
+            }
+            "rights" => {
+                if md.copyright.is_none() {
+                    md.copyright = text_of(desc);
+                }
+            }
+            "part-name" => {
+                if let Some(t) = text_of(desc) {
+                    md.instruments.push(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    md
+}
+
+fn parse_plaintext_metadata(src: &str) -> ScoreMetadata {
+    let mut md = ScoreMetadata::default();
+    // PAE: `@start:<label>` lines aren't titles per se — skip them.
+    // ABC: `T:Title`, `C:Composer`, `Z:Copyright`, `V:Voice` headers.
+    for line in src.lines().take(40) {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("T:") {
+            if md.title.is_none() {
+                md.title = Some(rest.trim().to_string());
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("C:") {
+            if md.composer.is_none() {
+                md.composer = Some(rest.trim().to_string());
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("Z:") {
+            if md.copyright.is_none() {
+                md.copyright = Some(rest.trim().to_string());
+            }
+        }
+    }
+    md
+}
+
+fn text_of(node: roxmltree::Node) -> Option<String> {
+    let mut buf = String::new();
+    // Walk only text nodes — `Node::text()` on an element returns its
+    // first text child, so iterating *all* descendants (including the
+    // wrapping element) would yield duplicates.
+    for d in node.descendants() {
+        if d.node_type() == roxmltree::NodeType::Text {
+            if let Some(t) = d.text() {
+                buf.push_str(t);
+            }
+        }
+    }
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn bounds_of(points: &[(f64, f64)]) -> (f64, f64, f64, f64) {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (x, y) in points {
+        if *x < min_x {
+            min_x = *x;
+        }
+        if *y < min_y {
+            min_y = *y;
+        }
+        if *x > max_x {
+            max_x = *x;
+        }
+        if *y > max_y {
+            max_y = *y;
+        }
+    }
+    (min_x, min_y, max_x, max_y)
 }

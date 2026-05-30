@@ -164,3 +164,61 @@ fn toolkit_tempo_map_matches_from_timemap_constructed_manually() {
 
     assert_eq!(direct, manual);
 }
+
+#[test]
+fn bpm_at_qstamp_returns_segment_tempo() {
+    let tm = tm_step_120_to_180_at_q4();
+    assert_eq!(tm.bpm_at_qstamp(0.0), Some(120.0));
+    assert_eq!(tm.bpm_at_qstamp(2.0), Some(120.0));
+    assert_eq!(tm.bpm_at_qstamp(4.0), Some(180.0));
+    assert_eq!(tm.bpm_at_qstamp(100.0), Some(180.0));
+}
+
+#[test]
+fn bpm_at_ms_returns_segment_tempo() {
+    let tm = tm_step_120_to_180_at_q4();
+    // At 120 BPM, q=4 lands at 2000 ms.
+    assert_eq!(tm.bpm_at_ms(0.0), Some(120.0));
+    assert_eq!(tm.bpm_at_ms(500.0), Some(120.0));
+    assert_eq!(tm.bpm_at_ms(1999.999), Some(120.0));
+    // 2000 ms onward is in the 180-BPM segment.
+    assert_eq!(tm.bpm_at_ms(2000.0), Some(180.0));
+    assert_eq!(tm.bpm_at_ms(5000.0), Some(180.0));
+}
+
+#[test]
+fn bpm_at_empty_map_returns_none() {
+    let tm = TempoMap::new(vec![]);
+    assert_eq!(tm.bpm_at_qstamp(0.0), None);
+    assert_eq!(tm.bpm_at_ms(0.0), None);
+}
+
+#[test]
+fn scaled_multiplies_every_bpm() {
+    let tm = tm_step_120_to_180_at_q4();
+    let half = tm.scaled(0.5);
+    assert_eq!(half.changes[0].bpm, 60.0);
+    assert_eq!(half.changes[1].bpm, 90.0);
+    // qstamps must not move under scaling — only BPMs do.
+    assert_eq!(half.changes[0].at_qstamp, 0.0);
+    assert_eq!(half.changes[1].at_qstamp, 4.0);
+}
+
+#[test]
+fn scaled_doubles_playback_wall_time_at_half_speed() {
+    let tm = tm_const_120();
+    let half = tm.scaled(0.5);
+    // Constant 120 BPM → 2000 ms for 4 quarters. At 0.5x → 4000 ms.
+    assert!((tm.qstamp_to_ms(4.0) - 2000.0).abs() < 1e-9);
+    assert!((half.qstamp_to_ms(4.0) - 4000.0).abs() < 1e-9);
+}
+
+#[test]
+fn scaled_zero_or_negative_clamps_to_near_zero_bpm() {
+    let tm = tm_const_120();
+    let zero = tm.scaled(0.0);
+    // Should not panic on division by zero — qstamp_to_ms returns a
+    // very large but finite ms.
+    let ms = zero.qstamp_to_ms(1.0);
+    assert!(ms.is_finite() && ms > 0.0);
+}

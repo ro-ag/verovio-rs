@@ -65,6 +65,60 @@ impl Default for MidiOptions {
     }
 }
 
+/// Axis-aligned bounding box in Verovio's SVG coordinate system (the
+/// outer `<svg viewBox="0 0 W H">`'s coordinate space — typically a few
+/// thousand units per page width). Use for click-to-seek hit testing
+/// and "highlight box around currently playing note" overlays.
+///
+/// Produce with [`Toolkit::bbox_map`](crate::Toolkit::bbox_map).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BBox {
+    /// Top-left x coordinate in SVG viewBox units.
+    pub x: f64,
+    /// Top-left y coordinate in SVG viewBox units.
+    pub y: f64,
+    /// Width in SVG viewBox units.
+    pub width: f64,
+    /// Height in SVG viewBox units.
+    pub height: f64,
+    /// 1-indexed page number the element lives on.
+    pub page: u32,
+}
+
+impl BBox {
+    /// Whether `(x, y)` falls inside the bbox. Used for hit testing
+    /// click events: walk the bbox map looking for the first element
+    /// that contains the click point.
+    pub fn contains(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+    }
+}
+
+/// Score-level metadata extracted from the loaded MEI or MusicXML input.
+///
+/// Produce with [`Toolkit::metadata`](crate::Toolkit::metadata). All
+/// fields are `None` / empty when the source format doesn't carry the
+/// information (PAE / ABC / inline plaintext fixtures typically yield a
+/// near-empty struct).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ScoreMetadata {
+    /// Work title (`<title>` in MEI, `<work-title>` in MusicXML).
+    pub title: Option<String>,
+    /// Composer name. First `<persName role="composer">` (MEI) or
+    /// `<creator type="composer">` (MusicXML).
+    pub composer: Option<String>,
+    /// Lyricist / librettist name.
+    pub lyricist: Option<String>,
+    /// Arranger name.
+    pub arranger: Option<String>,
+    /// Copyright / availability text.
+    pub copyright: Option<String>,
+    /// Instrument labels in score order — for MEI this comes from
+    /// `<staffDef>/<label>`, for MusicXML from `<part-name>`. Empty
+    /// for formats that don't carry instrument metadata.
+    pub instruments: Vec<String>,
+}
+
 /// Summary of one measure across the loaded score's timeline.
 ///
 /// Build with [`Toolkit::measures`](crate::Toolkit::measures) or
@@ -267,6 +321,68 @@ impl TempoMap {
             }
         }
         ms
+    }
+
+    /// Returns a new tempo map with every BPM multiplied by `factor`.
+    /// `factor < 1.0` slows playback; `> 1.0` speeds it up; `1.0` is a
+    /// no-op (returns a clone). Useful for "play at 50% for practice"
+    /// without mutating the original cached map.
+    ///
+    /// Non-positive factors clamp to a near-zero BPM to avoid division
+    /// by zero in [`Self::qstamp_to_ms`].
+    pub fn scaled(&self, factor: f64) -> Self {
+        let f = factor.max(1e-9);
+        let changes = self
+            .changes
+            .iter()
+            .map(|c| TempoChange {
+                at_qstamp: c.at_qstamp,
+                bpm: c.bpm * f,
+            })
+            .collect();
+        Self { changes }
+    }
+
+    /// Tempo (BPM) in effect at the given quarter-beat position. Returns
+    /// the BPM of the latest tempo change with `at_qstamp <= q`, or `None`
+    /// if the map is empty or `q` precedes the first tempo change.
+    pub fn bpm_at_qstamp(&self, q: f64) -> Option<f64> {
+        let mut current: Option<f64> = None;
+        for change in &self.changes {
+            if change.at_qstamp <= q {
+                current = Some(change.bpm);
+            } else {
+                break;
+            }
+        }
+        current
+    }
+
+    /// Tempo (BPM) in effect at the given wall-clock position. Equivalent
+    /// to `bpm_at_qstamp(ms_to_qstamp(ms))` but avoids the round-trip
+    /// through quarter beats.
+    pub fn bpm_at_ms(&self, ms: f64) -> Option<f64> {
+        if self.changes.is_empty() {
+            return None;
+        }
+        let mut accumulated_ms = 0.0;
+        for i in 0..self.changes.len() {
+            let q_start = self.changes[i].at_qstamp;
+            let bpm = self.changes[i].bpm;
+            let q_end = self
+                .changes
+                .get(i + 1)
+                .map(|c| c.at_qstamp)
+                .unwrap_or(f64::INFINITY);
+            let segment_ms_duration = (q_end - q_start) * 60_000.0 / bpm;
+            // Last segment extends to infinity, so this branch always
+            // matches eventually — the loop is guaranteed to return.
+            if ms < accumulated_ms + segment_ms_duration {
+                return Some(bpm);
+            }
+            accumulated_ms += segment_ms_duration;
+        }
+        Some(self.changes.last()?.bpm)
     }
 
     /// Convert wall-clock milliseconds to a quarter-beat position — the

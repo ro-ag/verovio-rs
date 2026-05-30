@@ -27,3 +27,17 @@ pub const DATA: Dir<'static> =
 pub fn extract(dest: &Path) -> io::Result<()> {
     DATA.extract(dest)
 }
+
+/// SMuFL font families bundled in this crate, as Verovio's `font`
+/// option understands them. Useful for populating a font picker in a UI
+/// without hard-coding the list at the call site.
+///
+/// The first entry (Bravura) is Verovio's default and the SMuFL
+/// reference font.
+pub const AVAILABLE_FONTS: &[&str] = &[
+    "Bravura",
+    "Leipzig",
+    "Gootville",
+    "Leland",
+    "Petaluma",
+];

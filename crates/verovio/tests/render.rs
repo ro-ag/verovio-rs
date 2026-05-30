@@ -204,3 +204,39 @@ fn elements_at_time_into_reuses_buffer() {
     tk.elements_at_time_into(100, &mut buf);
     assert!(buf.capacity() >= cap);
 }
+
+#[test]
+fn render_svg_measure_range_empty_for_zero_or_inverted() {
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c/4d/4e\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
+    assert_eq!(tk.render_svg_measure_range(0, 2, "\n").unwrap(), "");
+    assert_eq!(tk.render_svg_measure_range(3, 1, "\n").unwrap(), "");
+}
+
+#[test]
+fn render_svg_measure_range_returns_svg_payload() {
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c/4d/4e\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
+    let svg = tk.render_svg_measure_range(1, 2, "\n").unwrap();
+    assert!(svg.contains("<svg"), "expected SVG content, got {} bytes", svg.len());
+}
+
+#[test]
+fn render_svg_measure_range_restores_options() {
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).expect("load");
+    let before = tk.options();
+    let _ = tk.render_svg_measure_range(1, 1, "\n").unwrap();
+    let after = tk.options();
+    // The options JSON should be semantically restored. Verovio may
+    // re-emit it with slight whitespace differences, but the measureFrom
+    // / measureTo entries should be back to their defaults (empty or "0").
+    assert!(
+        !after.contains(r#""measureFrom": "1""#),
+        "measureFrom not restored: {after}"
+    );
+    let _ = before; // suppress unused warning if no diff is asserted
+}

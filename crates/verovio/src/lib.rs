@@ -46,12 +46,15 @@
 //! threads is unsound. For concurrent rendering, construct one `Toolkit` per
 //! thread or use a single worker thread fronted by a channel.
 
+#[cfg(feature = "audio")]
+pub mod audio;
 mod error;
 mod log;
 pub mod lookup;
 pub mod midi;
 #[cfg(any(feature = "png", feature = "pdf"))]
 pub mod raster;
+pub mod styling;
 mod toolkit;
 mod types;
 
@@ -59,6 +62,6 @@ pub use error::{Error, Result};
 pub use log::{set_log_level, LogLevel};
 pub use toolkit::Toolkit;
 pub use types::{
-    ClassifiedElements, ElementKind, ElementsAtTime, ExpansionMap, MeasureInfo, MidiOptions,
-    SvgOptions, TempoChange, TempoMap, Timemap, TimemapEvent, TimemapEventExact,
+    BBox, ClassifiedElements, ElementKind, ElementsAtTime, ExpansionMap, MeasureInfo, MidiOptions,
+    ScoreMetadata, SvgOptions, TempoChange, TempoMap, Timemap, TimemapEvent, TimemapEventExact,
 };
