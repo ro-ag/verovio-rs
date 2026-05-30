@@ -536,3 +536,157 @@ impl TimemapEventExact {
         (self.qfrac[0] as f64 / self.qfrac[1] as f64) * 60_000.0 / bpm
     }
 }
+
+/// MIDI values for a single note element, as reported by
+/// [`Toolkit::midi_values_for_element`](crate::Toolkit::midi_values_for_element).
+///
+/// Upstream emits an empty object for non-note elements (chord wrappers,
+/// rests, measures, missing IDs); we surface that as `None` from the safe
+/// wrapper so the type only exists when a note was actually found.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct MidiValues {
+    /// Wall-clock millisecond onset of the note.
+    pub time: i32,
+    /// MIDI pitch number (0-127, middle C = 60).
+    pub pitch: i32,
+    /// Note duration in milliseconds.
+    pub duration: i32,
+}
+
+/// Score-time and wall-clock onset/offset for a single note, as reported
+/// by [`Toolkit::times_for_element`](crate::Toolkit::times_for_element).
+///
+/// Each field is an array upstream — Verovio plans to support repeats /
+/// expansion clones per element, but currently each array carries at most
+/// one entry. `qfrac_*` fields are exact `[numerator, denominator]`
+/// quarter-beat positions; `tstamp_*` fields are f64 milliseconds.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ElementTimes {
+    /// Score-time onset(s) as exact `[num, den]` quarter-beat fractions.
+    #[serde(default, rename = "qfracOn")]
+    pub qfrac_on: Vec<[i64; 2]>,
+    /// Score-time offset(s) as exact `[num, den]` quarter-beat fractions.
+    #[serde(default, rename = "qfracOff")]
+    pub qfrac_off: Vec<[i64; 2]>,
+    /// Untied duration(s) as exact `[num, den]` quarter-beat fractions.
+    #[serde(default, rename = "qfracDuration")]
+    pub qfrac_duration: Vec<[i64; 2]>,
+    /// Total duration including following ties.
+    #[serde(default, rename = "qfracTiedDuration")]
+    pub qfrac_tied_duration: Vec<[i64; 2]>,
+    /// Wall-clock millisecond onset(s).
+    #[serde(default, rename = "tstampOn")]
+    pub tstamp_on: Vec<f64>,
+    /// Wall-clock millisecond offset(s).
+    #[serde(default, rename = "tstampOff")]
+    pub tstamp_off: Vec<f64>,
+}
+
+/// Typed wrapper for `GetMEI`'s JSON options. Apply with
+/// [`Toolkit::to_mei_with_options`](crate::Toolkit::to_mei_with_options) — or
+/// use [`Toolkit::to_mei`] for the all-defaults path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeiOptions {
+    /// 1-based page number to export. `None` (or `0`) exports the whole
+    /// document.
+    pub page_no: Option<u32>,
+    /// Score-based MEI (true) vs page-based MEI (false). Default true,
+    /// matching upstream's default; required for [`Self::basic`].
+    pub score_based: bool,
+    /// Emit MEI-Basic (a restricted subset). Default false. Requires
+    /// [`Self::score_based`] = true upstream — page-based MEI Basic
+    /// is not supported.
+    pub basic: bool,
+    /// Strip `@xml:id` attributes Verovio added but doesn't reference.
+    /// Default false.
+    pub remove_ids: bool,
+}
+
+impl Default for MeiOptions {
+    fn default() -> Self {
+        Self {
+            page_no: None,
+            score_based: true,
+            basic: false,
+            remove_ids: false,
+        }
+    }
+}
+
+impl MeiOptions {
+    /// Render to the JSON shape Verovio expects.
+    pub(crate) fn to_json(&self) -> String {
+        let page_no = self.page_no.unwrap_or(0);
+        format!(
+            r#"{{"pageNo": {page_no}, "scoreBased": {sb}, "basic": {b}, "removeIds": {ri}}}"#,
+            sb = self.score_based,
+            b = self.basic,
+            ri = self.remove_ids,
+        )
+    }
+}
+
+/// Typed wrapper batching the most commonly tweaked layout options into
+/// one [`Toolkit::set_options`](crate::Toolkit::set_options) call. Each
+/// `None` field is omitted from the emitted JSON so unset fields keep
+/// their previous values.
+///
+/// Apply with [`Toolkit::set_layout_options`](crate::Toolkit::set_layout_options).
+/// One call = one Verovio layout invalidation, vs N for the per-field
+/// `set_font` / `set_zoom` / … helpers.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayoutOptions {
+    /// SMuFL engraving font directory name (e.g. `"Bravura"`, `"Leipzig"`).
+    pub font: Option<String>,
+    /// Scale as a percent (`100` = 1×, `200` = 2×).
+    pub scale: Option<u32>,
+    /// Page width in Verovio's internal units.
+    pub page_width: Option<u32>,
+    /// Page height in Verovio's internal units.
+    pub page_height: Option<u32>,
+    /// `breaks` mode — one of `"auto"`, `"none"`, `"encoded"`, `"smart"`,
+    /// `"line"`. Other strings are rejected by Verovio.
+    pub breaks: Option<String>,
+    /// Swap page width/height on the next layout pass.
+    pub landscape: Option<bool>,
+    /// 1-based first measure to render (clamped). `Some("0")` ≡ none.
+    pub measure_from: Option<String>,
+    /// 1-based last measure to render (clamped).
+    pub measure_to: Option<String>,
+}
+
+impl LayoutOptions {
+    /// Render to the JSON shape Verovio expects — only set fields appear.
+    pub(crate) fn to_json(&self) -> String {
+        let mut fields: Vec<String> = Vec::new();
+        if let Some(font) = &self.font {
+            let escaped = font.replace('\\', "\\\\").replace('"', "\\\"");
+            fields.push(format!(r#""font": "{escaped}""#));
+        }
+        if let Some(scale) = self.scale {
+            fields.push(format!(r#""scale": {scale}"#));
+        }
+        if let Some(w) = self.page_width {
+            fields.push(format!(r#""pageWidth": {w}"#));
+        }
+        if let Some(h) = self.page_height {
+            fields.push(format!(r#""pageHeight": {h}"#));
+        }
+        if let Some(breaks) = &self.breaks {
+            let escaped = breaks.replace('\\', "\\\\").replace('"', "\\\"");
+            fields.push(format!(r#""breaks": "{escaped}""#));
+        }
+        if let Some(landscape) = self.landscape {
+            fields.push(format!(r#""landscape": {landscape}"#));
+        }
+        if let Some(from) = &self.measure_from {
+            let escaped = from.replace('\\', "\\\\").replace('"', "\\\"");
+            fields.push(format!(r#""measureFrom": "{escaped}""#));
+        }
+        if let Some(to) = &self.measure_to {
+            let escaped = to.replace('\\', "\\\\").replace('"', "\\\"");
+            fields.push(format!(r#""measureTo": "{escaped}""#));
+        }
+        format!("{{{}}}", fields.join(", "))
+    }
+}

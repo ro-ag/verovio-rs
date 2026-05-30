@@ -65,13 +65,13 @@ fn elements_at_returns_typed_struct_for_loaded_doc() {
 }
 
 #[test]
-fn elements_at_empty_doc_returns_default() {
+fn elements_at_empty_doc_returns_render_failed() {
     let mut tk = Toolkit::new();
-    let elements = tk.elements_at(0).expect("empty json parses fine");
-    // The safe wrapper returns "{}" for empty docs; serde fills defaults.
-    assert_eq!(elements.notes, Vec::<String>::new());
-    assert_eq!(elements.measure, None);
-    assert_eq!(elements.page, None);
+    // Empty document → render-family error, consistent with the rest of
+    // the render surface. Callers that want a degrade-to-empty path can
+    // map the error: `tk.elements_at(0).unwrap_or_default()`.
+    let res = tk.elements_at(0);
+    assert!(matches!(res, Err(verovio::Error::RenderFailed { page: 0 })));
 }
 
 #[test]

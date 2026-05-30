@@ -156,21 +156,26 @@ verovio = { version = "0.1", features = ["png", "pdf", "audio"] }
 
 | Surface | API |
 |---|---|
+| Loading | `load_data`, `load_file` (UTF-16 / `.mxl` aware via upstream), `load_zip_data_buffer` (raw `.mxl` bytes) |
 | SVG render | `render_to_svg`, `render_to_svg_into`, `render_to_svg_writer`, `render_svg_measure_range` |
 | PNG render | `render_to_png`, `render_to_png_all_pages` (`png` feature) |
 | PDF render | `render_to_pdf`, `render_to_pdf_all_pages` (`pdf` feature) |
-| MIDI render | `render_to_midi_bytes`, `render_to_midi_bytes_with_policy`, `render_to_midi_writer` |
+| MIDI render | `render_to_midi_bytes` (primary), `render_to_midi_bytes_with_policy`, `render_to_midi_writer`, `render_to_midi` (base64) |
 | MIDI policy | `MidiTrackPolicy` with channel / program / volume / pan / mute / sustain / transpose / expression / modulation / reverb / chorus / bank / port / track-name / instrument-name / time-sig / key-sig / tempo-curve / lyrics / cue points / measure markers |
 | MIDI helpers | `iter_smf_events`, `summarize`, `build_panic_smf`, `gm::{program_name, drum_key_name, note_name, midi_key_from_name}` |
 | Audio render | `render_to_wav`, `render_to_pcm`, `render_to_wav_with_policy` (`audio` feature) |
 | Audio live | `examples/live_playback.rs` (`live-audio` feature, cpal-based) |
-| Timemap | `timemap`, `timemap_exact`, `render_to_timemap`, `elements_at_time` |
+| Format conversion | `to_mei`, `to_mei_with_options(&MeiOptions)`, `render_to_pae`, `validate_pae` |
+| Timemap | `timemap`, `timemap_exact`, `render_to_timemap`, `elements_at_time` (returns `Result`) |
+| Element introspection | `page_with_element`, `time_for_element`, `times_for_element`, `midi_values_for_element`, `element_attr`, `notated_id_for_element`, `expansion_ids_for_element` |
 | Tempo | `TempoMap` with `qstamp_to_ms`, `ms_to_qstamp`, `bpm_at_qstamp`, `bpm_at_ms`, `scaled` |
 | Cursors | `PlaybackCursor` (monotonic, amortized O(1)), `LoopCursor` (`[start, end)` wrap) |
 | Lookup | `sounding_at`, `chord_at`, `note_duration`, `events_in_range`, `next_event_after`, `prev_event_before`, `measure_by_id`, … |
 | Score reading | `metadata`, `measures`, `staff_map`, **`bbox_map`** (click-to-seek + highlight rects), `classified_elements`, `expansion_map` |
-| Layout setters | `set_font`, `set_zoom`, `set_page_size`, `set_breaks`, `set_landscape`, `option_value` |
+| Options surface | `available_options` (schema), `reset_options`, `select(region_json)`, `set_layout_options(&LayoutOptions)`, `set_scale` / `scale`, `set_input_from`, `set_output_to`, `reset_xml_id_seed` |
+| Layout setters | `set_font`, `set_zoom`, `set_page_size`, `set_breaks`, `set_landscape`, `option_value`, `redo_page_pitch_pos_layout` |
 | Styling | `styling::stripe_tracks_by_id`, `styling::fade_others` (CSS class generators) |
+| Diagnostics | `id`, `resource_path`, `version` |
 | Log | `set_log_level` (mutex-gated) |
 
 ## Documentation

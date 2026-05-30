@@ -145,10 +145,10 @@ fn render_to_timemap_without_loaded_data_returns_err() {
 }
 
 #[test]
-fn elements_at_time_without_loaded_data_returns_empty_json() {
+fn elements_at_time_without_loaded_data_returns_render_failed() {
     let mut tk = Toolkit::new();
-    let json = tk.elements_at_time(0);
-    assert_eq!(json, "{}");
+    let res = tk.elements_at_time(0);
+    assert!(matches!(res, Err(verovio::Error::RenderFailed { page: 0 })));
 }
 
 #[test]
@@ -186,7 +186,7 @@ fn redo_layout_with_options_changes_layout() {
 #[test]
 fn elements_at_time_at_zero_returns_json() {
     let mut tk = loaded_toolkit();
-    let json = tk.elements_at_time(0);
+    let json = tk.elements_at_time(0).expect("elements_at_time");
     let trimmed = json.trim();
     assert!(
         trimmed.starts_with('{'),
@@ -199,9 +199,9 @@ fn elements_at_time_at_zero_returns_json() {
 fn elements_at_time_into_reuses_buffer() {
     let mut tk = loaded_toolkit();
     let mut buf = String::new();
-    tk.elements_at_time_into(0, &mut buf);
+    tk.elements_at_time_into(0, &mut buf).expect("elements_at_time_into");
     let cap = buf.capacity();
-    tk.elements_at_time_into(100, &mut buf);
+    tk.elements_at_time_into(100, &mut buf).expect("elements_at_time_into");
     assert!(buf.capacity() >= cap);
 }
 

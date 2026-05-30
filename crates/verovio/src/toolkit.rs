@@ -15,8 +15,9 @@ use cxx::UniquePtr;
 use verovio_sys::ffi;
 
 use crate::{
-    BBox, ClassifiedElements, ElementKind, ElementsAtTime, Error, ExpansionMap, MeasureInfo,
-    MidiOptions, Result, ScoreMetadata, SvgOptions, TempoMap, Timemap, TimemapEventExact,
+    BBox, ClassifiedElements, ElementKind, ElementTimes, ElementsAtTime, Error, ExpansionMap,
+    LayoutOptions, MeasureInfo, MeiOptions, MidiOptions, MidiValues, Result, ScoreMetadata,
+    SvgOptions, TempoMap, Timemap, TimemapEventExact,
 };
 
 /// Stage the bundled `verovio-data` resources into a process-lifetime tempdir
@@ -43,12 +44,17 @@ fn resource_path() -> &'static Path {
 /// that document. Construct one per score you want to engrave.
 pub struct Toolkit {
     inner: UniquePtr<ffi::Toolkit>,
-    /// Verbatim copy of the most recent `load_data` input, retained so
-    /// [`Self::metadata`] can parse title / composer / etc. out of the
-    /// original MEI or MusicXML — Verovio doesn't expose those through
-    /// the C++ Toolkit API. Memory cost: one extra `String` per loaded
-    /// score (~typical score: a few hundred KB).
-    last_loaded: Option<String>,
+    /// Score-level metadata parsed at load time. Verovio's C++ Toolkit
+    /// doesn't expose title/composer/etc., so we parse them from the
+    /// input data once and keep the small `ScoreMetadata` struct rather
+    /// than retaining the original (potentially hundreds-of-KB) source.
+    /// `None` until [`Self::load_data`] / [`Self::load_file`] succeed.
+    cached_metadata: Option<ScoreMetadata>,
+    /// Cached page count after first layout. `None` after any operation
+    /// that invalidates Verovio's layout (load_data, set_options,
+    /// reset_options, redo_layout, select, set_scale, set_layout_options,
+    /// set_*_options, …). Filled by [`Self::page_count`] on next call.
+    cached_page_count: std::cell::Cell<Option<u32>>,
 }
 
 // SAFETY: `Toolkit` is `Send` only because this crate deliberately does *not*
@@ -90,7 +96,8 @@ impl Toolkit {
         assert!(ok, "Verovio rejected SetResourcePath({path})");
         Self {
             inner,
-            last_loaded: None,
+            cached_metadata: None,
+            cached_page_count: std::cell::Cell::new(None),
         }
     }
 
@@ -116,37 +123,106 @@ impl Toolkit {
     }
 
     /// Load a score document. Verovio auto-detects the format from content
-    /// (MEI, MusicXML, Humdrum, ABC, PAE, ...).
+    /// (MEI, MusicXML, ABC, PAE, ...).
     ///
     /// Returns [`Error::LoadFailed`] if Verovio's parser rejects the input.
     pub fn load_data(&mut self, data: &str) -> Result<()> {
+        self.invalidate_caches();
         if ffi::load_data(self.inner.pin_mut(), data) {
-            self.last_loaded = Some(data.to_string());
+            self.cached_metadata = Some(parse_metadata(data));
             Ok(())
         } else {
             Err(Error::LoadFailed)
         }
     }
 
-    /// Read a score from disk and load it. Format auto-detected from the
-    /// file contents (the extension is not consulted).
+    /// Read a score from disk and load it.
+    ///
+    /// Delegates to upstream `Toolkit::LoadFile`, which handles UTF-16
+    /// MusicXML and compressed `.mxl` archives transparently — neither of
+    /// which a plain `fs::read_to_string` could read.
+    ///
+    /// Metadata extraction is best-effort: if the file reads back as UTF-8
+    /// text (most MEI / MusicXML / PAE / ABC), [`Self::metadata`] returns
+    /// the parsed fields. For binary inputs (`.mxl`, UTF-16) metadata is
+    /// empty — the data still loads into Verovio normally.
     ///
     /// Returns [`Error::Io`] on filesystem errors, [`Error::LoadFailed`] if
-    /// the parser rejects the content.
-    pub fn load_file(&mut self, path: impl AsRef<std::path::Path>) -> Result<()> {
-        let data = std::fs::read_to_string(path)?;
-        self.load_data(&data)
+    /// Verovio's parser rejects the content.
+    pub fn load_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| Error::Io(io::Error::other("path is not valid UTF-8")))?;
+        // Surface FS errors before invalidating caches.
+        if !path.exists() {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("file not found: {}", path.display()),
+            )));
+        }
+        self.invalidate_caches();
+        if !ffi::load_file(self.inner.pin_mut(), path_str) {
+            return Err(Error::LoadFailed);
+        }
+        // Best-effort metadata scrape: works for UTF-8 text inputs;
+        // silently leaves cached_metadata = None for .mxl / UTF-16.
+        if let Ok(text) = std::fs::read_to_string(path) {
+            self.cached_metadata = Some(parse_metadata(&text));
+        }
+        Ok(())
+    }
+
+    /// Load a compressed MusicXML file (`.mxl`) from raw bytes.
+    ///
+    /// Returns [`Error::LoadFailed`] if the buffer isn't a valid ZIP
+    /// archive or Verovio's unzip / parse rejects the contents. Metadata
+    /// is not parsed from compressed inputs.
+    ///
+    /// The magic-byte check is non-negotiable: upstream's
+    /// `LoadZipDataBuffer` calls into miniz-cpp without validation and
+    /// will `std::terminate` (uncaught `std::length_error`) on garbage
+    /// input. We reject obvious non-zip buffers in Rust before crossing
+    /// the FFI boundary.
+    pub fn load_zip_data_buffer(&mut self, data: &[u8]) -> Result<()> {
+        // ZIP local-file-header / empty-archive / spanned-archive
+        // magic. Anything else is a non-zip buffer — reject before
+        // calling upstream.
+        let valid_zip = data.len() >= 4
+            && data[0] == b'P'
+            && data[1] == b'K'
+            && (data[2..4] == [0x03, 0x04]
+                || data[2..4] == [0x05, 0x06]
+                || data[2..4] == [0x07, 0x08]);
+        if !valid_zip {
+            return Err(Error::LoadFailed);
+        }
+        self.invalidate_caches();
+        if ffi::load_zip_data_buffer(self.inner.pin_mut(), data) {
+            Ok(())
+        } else {
+            Err(Error::LoadFailed)
+        }
     }
 
     /// Number of layout pages for the currently-loaded document.
     ///
-    /// Takes `&mut self` because Verovio's `GetPageCount` is non-`const`
-    /// upstream — it triggers lazy layout computation on first call.
-    /// Returns `0` if no document is loaded or the upstream call returned
-    /// a negative value.
+    /// First call triggers Verovio's lazy layout computation and caches
+    /// the result; subsequent calls are O(1) without crossing the FFI
+    /// boundary. The cache is invalidated by any method that mutates
+    /// loaded data or layout options (`load_data`, `set_options`,
+    /// `reset_options`, `redo_layout`, `select`, `set_scale`, …).
+    ///
+    /// Returns `0` if no document is loaded or upstream returned a
+    /// negative value.
     pub fn page_count(&mut self) -> u32 {
+        if let Some(n) = self.cached_page_count.get() {
+            return n;
+        }
         let n = ffi::page_count(self.inner.pin_mut());
-        n.max(0) as u32
+        let count = n.max(0) as u32;
+        self.cached_page_count.set(Some(count));
+        count
     }
 
     /// Whether a document is currently loaded and laid out. Implemented as
@@ -154,6 +230,14 @@ impl Toolkit {
     /// reach for the underlying number to express the same intent.
     pub fn is_loaded(&mut self) -> bool {
         self.page_count() > 0
+    }
+
+    /// Drop every cached value derived from the loaded document — the
+    /// page-count cache and the metadata scrape. Called from every
+    /// method that mutates Verovio's loaded data or layout options.
+    fn invalidate_caches(&mut self) {
+        self.cached_page_count.set(None);
+        self.cached_metadata = None;
     }
 
     /// Current option set as a JSON document.
@@ -243,6 +327,10 @@ impl Toolkit {
     /// Returns [`Error::OptionsRejected`] if Verovio fails to parse the JSON
     /// or it names an unrecognized option.
     pub fn set_options(&mut self, json: &str) -> Result<()> {
+        // Layout-affecting options invalidate the cached page count.
+        // Verovio doesn't tell us which options touch layout vs. not,
+        // so invalidate unconditionally.
+        self.cached_page_count.set(None);
         if ffi::set_options(self.inner.pin_mut(), json) {
             Ok(())
         } else {
@@ -317,13 +405,16 @@ impl Toolkit {
         Ok(())
     }
 
-    /// Render the loaded document to MIDI, returned as **base64-encoded**
-    /// bytes (Verovio's upstream convention so the binary payload fits in a
-    /// `std::string`).
+    /// Render the loaded document to MIDI as a **base64-encoded** string —
+    /// Verovio's upstream convention so the binary payload fits inside a
+    /// `std::string`.
     ///
-    /// Decode with any base64 crate (e.g. `base64::engine::general_purpose
-    /// ::STANDARD.decode(&midi)`) to get the raw `Vec<u8>` `.mid` payload —
-    /// or just call [`Self::render_to_midi_bytes`].
+    /// **Most Rust callers want [`Self::render_to_midi_bytes`]** instead —
+    /// the raw `.mid` SMF bytes you'd write to a file or hand to a
+    /// synthesizer. This base64 form is provided for browser interop and
+    /// applications that already pipe the upstream payload through a
+    /// base64-aware downstream channel.
+    ///
     /// Returns [`Error::RenderFailed`] (with `page: 0`) if no document is
     /// loaded (Verovio's `RenderToMIDI` would otherwise hit an internal
     /// `assert(!m_visibleScores.empty())` and SIGABRT the process — we
@@ -355,9 +446,12 @@ impl Toolkit {
         Ok(())
     }
 
-    /// Render to MIDI, decoded into raw SMF (Standard MIDI File) bytes — the
-    /// form you'd write to a `.mid` file. Convenience over the base64 round
-    /// trip of [`Self::render_to_midi`].
+    /// Render to MIDI as raw SMF (Standard MIDI File) bytes — the form you'd
+    /// write to a `.mid` file or hand to a synthesizer like `rustysynth`.
+    ///
+    /// This is the **recommended primary form** for Rust consumers — the
+    /// base64-encoded [`Self::render_to_midi`] only exists because upstream
+    /// can't return binary `std::string` cleanly.
     ///
     /// Returns [`Error::RenderFailed`] if no document is loaded, or
     /// [`Error::Base64`] if Verovio's output is malformed (shouldn't happen).
@@ -450,13 +544,24 @@ impl Toolkit {
     /// Layout happens lazily on the first render call; explicit
     /// `redo_layout` is only needed after option changes that affect layout.
     pub fn redo_layout(&mut self) {
+        self.cached_page_count.set(None);
         ffi::redo_layout(self.inner.pin_mut(), "");
     }
 
     /// Force a layout pass with a JSON options overlay applied for this
     /// pass only.
     pub fn redo_layout_with_options(&mut self, options: &str) {
+        self.cached_page_count.set(None);
         ffi::redo_layout(self.inner.pin_mut(), options);
+    }
+
+    /// Recalculate only the vertical (pitch) positions of notes on the
+    /// current page — cheaper than a full [`Self::redo_layout`].
+    ///
+    /// Use after option changes that affect note positioning but not
+    /// horizontal spacing (e.g. fine-grained accidental tuning).
+    pub fn redo_page_pitch_pos_layout(&mut self) {
+        ffi::redo_page_pitch_pos_layout(self.inner.pin_mut());
     }
 
     /// Render the timemap parsed into typed [`TimemapEvent`](crate::TimemapEvent)s
@@ -665,41 +770,19 @@ impl Toolkit {
     /// Parse score-level metadata (title, composer, lyricist, copyright,
     /// instrument labels) out of the originally loaded MEI or MusicXML.
     /// Verovio's C++ Toolkit doesn't expose these — we parse them from
-    /// the verbatim input cached by [`Self::load_data`].
+    /// the input at load time and cache the small [`ScoreMetadata`]
+    /// struct rather than retaining the raw source.
     ///
     /// Returns mostly-empty fields when the source format doesn't carry
     /// the corresponding metadata: PAE, ABC, and Humdrum bodies have at
     /// most a title or composer, where MEI / MusicXML carry the full
-    /// `<respStmt>` / `<identification>` set.
+    /// `<respStmt>` / `<identification>` set. Compressed (`.mxl`) and
+    /// UTF-16 inputs loaded via [`Self::load_file`] never carry
+    /// scrapeable metadata; the struct is empty in those cases.
     ///
     /// Returns [`Error::LoadFailed`] if no document has been loaded yet.
     pub fn metadata(&self) -> Result<ScoreMetadata> {
-        let src = self.last_loaded.as_deref().ok_or(Error::LoadFailed)?;
-        let trimmed = src.trim_start();
-        if looks_like_xml(trimmed) {
-            // MusicXML files routinely carry a DOCTYPE declaration;
-            // roxmltree refuses those by default for XXE-style safety.
-            // Score input is trusted here (the caller already handed it
-            // to Verovio), so opt in to DTD parsing.
-            let opts = roxmltree::ParsingOptions {
-                allow_dtd: true,
-                ..roxmltree::ParsingOptions::default()
-            };
-            let doc = roxmltree::Document::parse_with_options(src, opts)
-                .map_err(|e| Error::Xml(e.to_string()))?;
-            let root = doc.root_element();
-            let root_name = root.tag_name().name();
-            if root_name == "mei" {
-                Ok(parse_mei_metadata(&doc))
-            } else if root_name == "score-partwise" || root_name == "score-timewise" {
-                Ok(parse_musicxml_metadata(&doc))
-            } else {
-                Ok(ScoreMetadata::default())
-            }
-        } else {
-            // PAE / ABC / Humdrum — best-effort first-line scrape.
-            Ok(parse_plaintext_metadata(src))
-        }
+        self.cached_metadata.clone().ok_or(Error::LoadFailed)
     }
 
     /// Extract the tempo changes from the document as a [`TempoMap`] — the
@@ -738,9 +821,11 @@ impl Toolkit {
     }
 
     /// Return the elements active at the given playback time as a typed
-    /// [`ElementsAtTime`]. Empty doc returns `Default::default()`.
+    /// [`ElementsAtTime`].
+    ///
+    /// Returns [`Error::RenderFailed`] if no document is loaded.
     pub fn elements_at(&mut self, millis: u32) -> Result<ElementsAtTime> {
-        let json = self.elements_at_time(millis);
+        let json = self.elements_at_time(millis)?;
         Ok(serde_json::from_str(&json)?)
     }
 
@@ -749,25 +834,27 @@ impl Toolkit {
     /// Parse with `serde_json` — or use [`Self::elements_at`] for the typed
     /// equivalent.
     ///
-    /// Returns `"{}"` if no document is loaded (Verovio's score-walk would
-    /// otherwise assert).
-    pub fn elements_at_time(&mut self, millis: u32) -> String {
+    /// Returns [`Error::RenderFailed`] (with `page: 0`) if no document is
+    /// loaded — consistent with the rest of the render family. For an
+    /// always-Ok variant returning `"{}"` on missing data, fall back to
+    /// `.elements_at_time(ms).unwrap_or_else(|_| "{}".into())`.
+    pub fn elements_at_time(&mut self, millis: u32) -> Result<String> {
         if self.page_count() == 0 {
-            return "{}".into();
+            return Err(Error::RenderFailed { page: 0 });
         }
-        ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32)
+        Ok(ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32))
     }
 
     /// Return the element IDs active at the given playback time, written
     /// into the caller's buffer.
-    pub fn elements_at_time_into(&mut self, millis: u32, out: &mut String) {
+    pub fn elements_at_time_into(&mut self, millis: u32, out: &mut String) -> Result<()> {
         out.clear();
         if self.page_count() == 0 {
-            out.push_str("{}");
-            return;
+            return Err(Error::RenderFailed { page: 0 });
         }
         let json = ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32);
         out.push_str(&json);
+        Ok(())
     }
 
     /// Render every page that touches measures `from..=to` (1-indexed,
@@ -803,6 +890,295 @@ impl Toolkit {
         let _ = self.set_options(&saved_opts);
         self.redo_layout();
         Ok(out)
+    }
+
+    // -----------------------------------------------------------------
+    // Diagnostics
+    // -----------------------------------------------------------------
+
+    /// Opaque per-document identifier (`vrv::Doc::GetID`). Useful for
+    /// log correlation when running multiple toolkits in one process.
+    pub fn id(&mut self) -> String {
+        ffi::get_id(self.inner.pin_mut())
+    }
+
+    /// Read back the resource path Verovio is currently using — the
+    /// directory containing the SMuFL font data (Bravura, Leipzig, …).
+    pub fn resource_path(&self) -> String {
+        ffi::get_resource_path(&self.inner)
+    }
+
+    // -----------------------------------------------------------------
+    // Options surface (extended)
+    // -----------------------------------------------------------------
+
+    /// Full option schema as a JSON document: every option grouped by
+    /// category, with type / default / minimum / maximum where
+    /// available. Use for generating CLI help, validating user input
+    /// before applying it, or building an options-editor UI.
+    pub fn available_options(&self) -> String {
+        ffi::get_available_options(&self.inner)
+    }
+
+    /// Reset every option to its compile-time default. Invalidates the
+    /// cached page count (option changes can affect layout).
+    pub fn reset_options(&mut self) {
+        self.cached_page_count.set(None);
+        ffi::reset_options(self.inner.pin_mut());
+    }
+
+    /// Apply a region selection (measure / staff range) for subsequent
+    /// renders. See `vrv::Toolkit::Select` upstream for the JSON
+    /// schema; pass an empty string or `"{}"` to clear the selection.
+    ///
+    /// Returns [`Error::OptionsRejected`] if Verovio rejects the JSON
+    /// (malformed, or naming an mdiv that doesn't exist).
+    pub fn select(&mut self, selection: &str) -> Result<()> {
+        self.cached_page_count.set(None);
+        if ffi::select(self.inner.pin_mut(), selection) {
+            Ok(())
+        } else {
+            Err(Error::OptionsRejected)
+        }
+    }
+
+    /// Typed scale setter — same effect as `set_options({"scale": pct})`
+    /// without the JSON round-trip. `100` = 1×, `200` = 2×.
+    pub fn set_scale(&mut self, pct: u32) -> Result<()> {
+        self.cached_page_count.set(None);
+        if ffi::set_scale(self.inner.pin_mut(), pct as i32) {
+            Ok(())
+        } else {
+            Err(Error::OptionsRejected)
+        }
+    }
+
+    /// Current scale percent. `100` = 1×.
+    pub fn scale(&mut self) -> u32 {
+        let s = ffi::get_scale(self.inner.pin_mut());
+        s.max(0) as u32
+    }
+
+    /// Force the input format instead of letting Verovio auto-detect.
+    /// Accepts the same strings Verovio's `--from` CLI flag does
+    /// (`"mei"`, `"musicxml"`, `"abc"`, `"pae"`, `"humdrum"`, …).
+    ///
+    /// Returns [`Error::OptionsRejected`] for unrecognized format names.
+    pub fn set_input_from(&mut self, format: &str) -> Result<()> {
+        self.cached_page_count.set(None);
+        if ffi::set_input_from(self.inner.pin_mut(), format) {
+            Ok(())
+        } else {
+            Err(Error::OptionsRejected)
+        }
+    }
+
+    /// Force the output format for subsequent calls that respect the
+    /// `outputTo` option. Accepts the same strings as Verovio's
+    /// `--to` CLI flag (`"svg"`, `"mei"`, `"mei-basic"`, `"midi"`,
+    /// `"pae"`, `"timemap"`, …).
+    pub fn set_output_to(&mut self, format: &str) -> Result<()> {
+        self.cached_page_count.set(None);
+        if ffi::set_output_to(self.inner.pin_mut(), format) {
+            Ok(())
+        } else {
+            Err(Error::OptionsRejected)
+        }
+    }
+
+    /// Re-seed the `@xml:id` generator. Pass `0` for a time-based
+    /// random seed; pass a fixed value for reproducible IDs in
+    /// snapshot tests. No-op when Verovio's `--xml-id-checksum` option
+    /// is set.
+    pub fn reset_xml_id_seed(&mut self, seed: u32) {
+        ffi::reset_xml_id_seed(self.inner.pin_mut(), seed as i32);
+    }
+
+    /// Apply a batch of layout options via [`LayoutOptions`] — one
+    /// `SetOptions` call (= one layout invalidation), versus the N
+    /// invalidations you'd pay by chaining `set_font` / `set_zoom` /
+    /// `set_page_size` separately.
+    ///
+    /// Unset (`None`) fields are omitted from the emitted JSON, so
+    /// they keep their previous values.
+    pub fn set_layout_options(&mut self, opts: &LayoutOptions) -> Result<()> {
+        self.set_options(&opts.to_json())
+    }
+
+    // -----------------------------------------------------------------
+    // Conversion / serialization
+    // -----------------------------------------------------------------
+
+    /// Serialize the loaded document as MEI with default options
+    /// (score-based, all pages, IDs preserved). Convenient for
+    /// converting MusicXML / ABC / PAE / Humdrum input to canonical MEI.
+    pub fn to_mei(&mut self) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        Ok(ffi::get_mei(self.inner.pin_mut(), ""))
+    }
+
+    /// Serialize the loaded document as MEI with explicit options
+    /// (page selection, MEI-Basic restriction, ID cleanup). See
+    /// [`MeiOptions`] for the fields.
+    pub fn to_mei_with_options(&mut self, opts: &MeiOptions) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        Ok(ffi::get_mei(self.inner.pin_mut(), &opts.to_json()))
+    }
+
+    /// Serialize the loaded document as Plaine & Easie code. Only the
+    /// top staff / layer is exported (upstream limitation).
+    pub fn render_to_pae(&mut self) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        let pae = ffi::render_to_pae(self.inner.pin_mut());
+        if pae.is_empty() {
+            Err(Error::RenderFailed { page: 0 })
+        } else {
+            Ok(pae)
+        }
+    }
+
+    /// Validate Plaine & Easie input — returns the upstream JSON object
+    /// describing any warnings or errors per input key. **Discards any
+    /// previously loaded document** (upstream behavior; documented on
+    /// `vrv::Toolkit::ValidatePAE`).
+    ///
+    /// Returns the raw JSON string for callers that want to forward it;
+    /// pair with `serde_json::from_str` if you want to walk the
+    /// structure.
+    pub fn validate_pae(&mut self, data: &str) -> String {
+        self.invalidate_caches();
+        ffi::validate_pae(self.inner.pin_mut(), data)
+    }
+
+    /// Extract descriptive features for incipit / structural search,
+    /// as a JSON string. `json_options` is upstream's feature-extraction
+    /// option schema; pass `"{}"` for defaults.
+    pub fn descriptive_features(&mut self, json_options: &str) -> Result<String> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        Ok(ffi::get_descriptive_features(self.inner.pin_mut(), json_options))
+    }
+
+    // -----------------------------------------------------------------
+    // Element introspection — the inverse of `elements_at_time`.
+    // -----------------------------------------------------------------
+
+    /// Page (1-based) on which the element with `xml_id` is rendered.
+    /// Returns `None` if the element doesn't exist in the loaded
+    /// document.
+    pub fn page_with_element(&mut self, xml_id: &str) -> Option<u32> {
+        let n = ffi::get_page_with_element(self.inner.pin_mut(), xml_id);
+        if n <= 0 {
+            None
+        } else {
+            Some(n as u32)
+        }
+    }
+
+    /// Wall-clock millisecond onset of the element with `xml_id`.
+    /// Returns `None` if the element doesn't exist or isn't playable
+    /// (rest, measure marker, …).
+    ///
+    /// Internally renders the timemap once per loaded document to
+    /// populate Verovio's MIDI doc — required by upstream and
+    /// otherwise a documented footgun. Subsequent calls hit the
+    /// cached MIDI doc.
+    pub fn time_for_element(&mut self, xml_id: &str) -> Option<u32> {
+        self.ensure_midi_doc().ok()?;
+        let t = ffi::get_time_for_element(self.inner.pin_mut(), xml_id);
+        if t < 0 {
+            None
+        } else {
+            Some(t as u32)
+        }
+    }
+
+    /// MIDI pitch / onset / duration for a note element. Returns `None`
+    /// for chord wrappers, rests, missing IDs, or elements that aren't
+    /// individual notes — upstream emits an empty JSON object in those
+    /// cases.
+    ///
+    /// Internally renders the timemap once per loaded document.
+    pub fn midi_values_for_element(&mut self, xml_id: &str) -> Result<Option<MidiValues>> {
+        self.ensure_midi_doc()?;
+        let json = ffi::get_midi_values_for_element(self.inner.pin_mut(), xml_id);
+        // Upstream returns "{}" for non-notes / missing elements; map
+        // that to None so the typed wrapper isn't misleading.
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        if v.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
+    /// Score-time + wall-clock onset/offset for a note element. Returns
+    /// `None` for non-notes or missing IDs (upstream emits `{}`).
+    ///
+    /// Internally renders the timemap once per loaded document.
+    pub fn times_for_element(&mut self, xml_id: &str) -> Result<Option<ElementTimes>> {
+        self.ensure_midi_doc()?;
+        let json = ffi::get_times_for_element(self.inner.pin_mut(), xml_id);
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        if v.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return Ok(None);
+        }
+        Ok(Some(serde_json::from_value(v)?))
+    }
+
+    /// Force Verovio to populate its internal MIDI document and its
+    /// timemap if the loaded score hasn't done so yet. Required before
+    /// element-time / element-MIDI-value queries — upstream documents
+    /// "RenderToMIDI() must be called prior". We do it lazily here so
+    /// callers don't have to remember the dance.
+    fn ensure_midi_doc(&mut self) -> Result<()> {
+        if self.page_count() == 0 {
+            return Err(Error::RenderFailed { page: 0 });
+        }
+        // RenderToTimemap is cheaper than RenderToMIDI (no SMF
+        // serialization) and bootstraps the same internal state.
+        // The result is discarded; this exists purely for the side
+        // effect on Verovio's MIDI doc.
+        let _ = ffi::render_to_timemap(self.inner.pin_mut(), "");
+        Ok(())
+    }
+
+    /// Every MEI attribute on the element with `xml_id`, as a typed
+    /// map. Returns an empty map for unknown IDs. Attribute values are
+    /// returned as `serde_json::Value` (most are strings but
+    /// numeric-typed attrs come back as numbers).
+    pub fn element_attr(&mut self, xml_id: &str) -> Result<HashMap<String, serde_json::Value>> {
+        let json = ffi::get_element_attr(self.inner.pin_mut(), xml_id);
+        Ok(serde_json::from_str(&json)?)
+    }
+
+    /// MEI ID of the notated (original) element when `xml_id` refers
+    /// to an expansion clone. Returns `xml_id` itself if the score
+    /// has no `<expansion>` markers — this matches upstream's
+    /// pass-through behavior.
+    pub fn notated_id_for_element(&mut self, xml_id: &str) -> String {
+        ffi::get_notated_id_for_element(self.inner.pin_mut(), xml_id)
+    }
+
+    /// Every expansion-clone ID that shares the notated `xml_id`.
+    /// Returns an empty vec when the score has no expansion map
+    /// (upstream emits `[""]` in that case — we strip the sentinel).
+    pub fn expansion_ids_for_element(&mut self, xml_id: &str) -> Result<Vec<String>> {
+        let json = ffi::get_expansion_ids_for_element(self.inner.pin_mut(), xml_id);
+        let ids: Vec<String> = serde_json::from_str(&json)?;
+        // Strip the upstream sentinel: a single empty string means
+        // "no expansion map at all" rather than "an element with no
+        // expansion clones".
+        if ids.len() == 1 && ids[0].is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(ids)
     }
 }
 
@@ -970,6 +1346,39 @@ fn looks_like_xml(s: &str) -> bool {
         || s.starts_with("<score-partwise")
         || s.starts_with("<score-timewise")
         || s.starts_with("<!DOCTYPE")
+}
+
+/// Parse score-level metadata from raw input text. Picks the right
+/// branch (MEI / MusicXML / plaintext) and falls back to an empty
+/// struct on parse failure — metadata is best-effort by design.
+fn parse_metadata(src: &str) -> ScoreMetadata {
+    let trimmed = src.trim_start();
+    if looks_like_xml(trimmed) {
+        // MusicXML files routinely carry a DOCTYPE declaration; roxmltree
+        // refuses those by default for XXE-style safety. Score input is
+        // trusted here (the caller already handed it to Verovio), so opt
+        // in to DTD parsing.
+        let opts = roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..roxmltree::ParsingOptions::default()
+        };
+        match roxmltree::Document::parse_with_options(src, opts) {
+            Ok(doc) => {
+                let root = doc.root_element();
+                let root_name = root.tag_name().name();
+                if root_name == "mei" {
+                    parse_mei_metadata(&doc)
+                } else if root_name == "score-partwise" || root_name == "score-timewise" {
+                    parse_musicxml_metadata(&doc)
+                } else {
+                    ScoreMetadata::default()
+                }
+            }
+            Err(_) => ScoreMetadata::default(),
+        }
+    } else {
+        parse_plaintext_metadata(src)
+    }
 }
 
 fn parse_mei_metadata(doc: &roxmltree::Document) -> ScoreMetadata {

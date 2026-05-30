@@ -8,6 +8,91 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+### Added — Toolkit surface expansion
+
+Bridges every upstream `Toolkit` method that's safe to expose under our
+contract (Humdrum / SetLocale / GetLog still deliberately excluded).
+
+- **Element introspection** (the inverse of `elements_at_time`):
+  - `page_with_element(xml_id) -> Option<u32>` — for click-to-jump UIs.
+  - `time_for_element(xml_id) -> Option<u32>` — wall-clock onset.
+  - `midi_values_for_element(xml_id) -> Result<Option<MidiValues>>` —
+    pitch / duration / time for a note.
+  - `times_for_element(xml_id) -> Result<Option<ElementTimes>>` —
+    score-time + real-time onset / offset / duration / tied-duration.
+  - `element_attr(xml_id) -> Result<HashMap<String, serde_json::Value>>` —
+    every MEI attribute on the element.
+  - `notated_id_for_element(xml_id) -> String` — expansion-clone → notated.
+  - `expansion_ids_for_element(xml_id) -> Result<Vec<String>>` — all
+    expansion clones sharing the notated id.
+  - All three time-aware methods auto-bootstrap Verovio's MIDI doc
+    (lazy timemap render) so callers don't have to remember the
+    upstream "RenderToMIDI() must be called prior" sequencing.
+- **Format conversion**:
+  - `to_mei() -> Result<String>` and `to_mei_with_options(&MeiOptions)`
+    — canonical MEI export, including MEI-Basic and ID stripping.
+  - `render_to_pae() -> Result<String>` — top-staff PAE export.
+  - `validate_pae(data) -> String` — pre-load validation report.
+  - `descriptive_features(json_opts) -> Result<String>` — incipit-search
+    feature extraction.
+- **Loading**:
+  - `load_zip_data_buffer(&[u8]) -> Result<()>` — compressed `.mxl`
+    loading from raw bytes. Guards against malformed zip with a
+    Rust-side magic-byte check (upstream `std::terminate`s on
+    non-zip input).
+  - `load_file` now delegates to upstream `Toolkit::LoadFile`, fixing
+    silent breakage on UTF-16 MusicXML and compressed inputs. UTF-8
+    text inputs still get metadata scraping (best-effort).
+- **Options surface**:
+  - `available_options() -> String` — full schema (type / default /
+    min / max grouped by category) for CLI help generation and
+    options-editor UIs.
+  - `reset_options()` — return every option to its compile-time default.
+  - `select(&str) -> Result<()>` — scoped rendering region.
+  - `set_scale(u32)` / `scale() -> u32` — typed scale, no JSON
+    round-trip.
+  - `set_input_from(&str)` / `set_output_to(&str)` — force format
+    instead of auto-detect.
+  - `reset_xml_id_seed(u32)` — reproducible `@xml:id` generation.
+  - `set_layout_options(&LayoutOptions)` — one `SetOptions` call
+    (= one layout invalidation) for a batch of font / scale /
+    page-size / breaks / landscape / measure-range fields.
+- **Layout**:
+  - `redo_page_pitch_pos_layout()` — cheaper than full `redo_layout`
+    when only note vertical positions change.
+- **Diagnostics**: `id() -> String`, `resource_path() -> String`.
+
+### Added — New types
+
+- `MidiValues { time, pitch, duration }`.
+- `ElementTimes { qfrac_on/off/duration/tied_duration, tstamp_on/off }`.
+- `MeiOptions { page_no, score_based, basic, remove_ids }` — `Default`
+  matches upstream (`score_based: true`).
+- `LayoutOptions { font, scale, page_width, page_height, breaks,
+  landscape, measure_from, measure_to }` — sparse builder, unset
+  fields omitted from emitted JSON.
+
+### Changed
+
+- **`Toolkit::elements_at_time`** now returns `Result<String>` (was
+  `String`). Empty-doc calls return `Err(RenderFailed { page: 0 })`
+  for consistency with the rest of the render family. Callers that
+  want the previous degrade-to-`"{}"` behavior can chain
+  `.unwrap_or_else(|_| "{}".into())`. Same for `elements_at_time_into`
+  (now `Result<()>`).
+- **`Toolkit::elements_at`** propagates the same error rather than
+  returning a default empty `ElementsAtTime`.
+- **`Toolkit::page_count`** is now cached — first call computes,
+  subsequent calls are O(1) without crossing FFI. Invalidated by any
+  method that mutates loaded data or layout options.
+- **`Toolkit::metadata`** no longer retains the raw input string. The
+  `ScoreMetadata` struct is parsed once at `load_data` / `load_file`
+  time and cached; memory cost per `Toolkit` drops from
+  O(input size) to O(extracted metadata).
+- **`render_to_midi_bytes` is now documented as the recommended
+  primary form**; `render_to_midi` (base64 string) is positioned as
+  the lower-level option for browser interop.
+
 ## [0.2.0] — 2026-05-30
 
 First public release. Repository made public on 2026-05-30 after the
