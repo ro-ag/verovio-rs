@@ -291,3 +291,128 @@ fn sounding_at_matches_verovios_elements_at_time_at_key_moments() {
         );
     }
 }
+
+#[test]
+fn sounding_count_at_matches_len_of_sounding_at() {
+    use verovio::lookup::{sounding_at, sounding_count_at};
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+    for ev in &tm {
+        let ms = ev.tstamp;
+        let v = sounding_at(&tm, ms);
+        let n = sounding_count_at(&tm, ms);
+        assert_eq!(n, v.len(), "count mismatch at ms={ms}");
+    }
+}
+
+#[test]
+fn distinct_element_count_equals_unique_ons() {
+    use std::collections::BTreeSet;
+    use verovio::lookup::distinct_element_count;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+
+    let mut reference: BTreeSet<&str> = BTreeSet::new();
+    for ev in &tm {
+        for id in &ev.on {
+            reference.insert(id.as_str());
+        }
+    }
+    let count = distinct_element_count(&tm);
+    assert_eq!(count, reference.len(), "distinct count mismatch");
+    assert!(count > 0, "fixture should have at least one onset");
+}
+
+#[test]
+fn chord_at_returns_last_onset_group() {
+    use verovio::lookup::chord_at;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+    // Pick the first event with non-empty `on`; chord_at at that ms should
+    // return exactly that event's `on`.
+    let onset = tm.iter().find(|e| !e.on.is_empty()).expect("onset");
+    let chord = chord_at(&tm, onset.tstamp);
+    assert_eq!(chord, onset.on);
+}
+
+#[test]
+fn chord_at_before_first_onset_is_empty() {
+    use verovio::lookup::chord_at;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+    assert!(chord_at(&tm, -100.0).is_empty());
+}
+
+#[test]
+fn note_duration_locates_on_then_off() {
+    use verovio::lookup::note_duration;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+    let first_id = tm
+        .iter()
+        .find_map(|e| e.on.first().cloned())
+        .expect("first id");
+    let (on_ms, off_ms) = note_duration(&tm, &first_id).expect("found");
+    assert!(off_ms >= on_ms, "off should not precede on");
+}
+
+#[test]
+fn note_duration_unknown_id_returns_none() {
+    use verovio::lookup::note_duration;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+    assert!(note_duration(&tm, "no-such-id").is_none());
+}
+
+#[test]
+fn loop_cursor_wraps_at_end_boundary() {
+    use verovio::lookup::LoopCursor;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let tm = tk.timemap().unwrap();
+
+    let duration = tm.last().map(|e| e.tstamp).unwrap_or(1000.0);
+    let mid = duration / 2.0;
+    let mut cur = LoopCursor::new(&tm, 0.0, mid);
+
+    // Advancing past the end should wrap back inside [0, mid).
+    let _ = cur.advance_to(mid + 100.0);
+    let pos = cur.position_ms();
+    assert!(
+        pos >= 0.0 && pos < mid,
+        "expected position inside loop region [0,{mid}), got {pos}"
+    );
+}
+
+#[test]
+fn measure_by_id_finds_existing() {
+    use verovio::lookup::measure_by_id;
+    const PAE: &str =
+        "@start:s\n@clef:G-2\n@keysig:xF\n@key:\n@timesig:4/4\n@data:'4G/4A/4B/4c\n@end:s\n";
+    let mut tk = verovio::Toolkit::from_data(PAE).unwrap();
+    let measures = tk.measures().expect("measures");
+    assert!(!measures.is_empty());
+    let target_id = measures[0].id.clone();
+    let found = measure_by_id(&measures, &target_id).expect("found");
+    assert_eq!(found.id, target_id);
+}
+
+#[test]
+fn measure_by_id_missing_returns_none() {
+    use verovio::lookup::measure_by_id;
+    let empty: Vec<verovio::MeasureInfo> = vec![];
+    assert!(measure_by_id(&empty, "no-such").is_none());
+}

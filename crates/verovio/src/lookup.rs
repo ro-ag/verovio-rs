@@ -40,6 +40,13 @@ use std::collections::BTreeSet;
 
 use crate::{MeasureInfo, TimemapEvent, TimemapEventExact};
 
+/// Find a measure by its MEI id in a cached `Vec<MeasureInfo>`. O(N) —
+/// for occasional lookups during seek/loop UI. Cache the result if
+/// querying inside a hot path.
+pub fn measure_by_id<'a>(measures: &'a [MeasureInfo], id: &str) -> Option<&'a MeasureInfo> {
+    measures.iter().find(|m| m.id == id)
+}
+
 /// Find the measure ID enclosing `ms` in a cached exact-timemap. Returns
 /// the most recent `measure_on` whose `tstamp <= ms`, or `None` if the
 /// time is before the first measure marker.
@@ -125,6 +132,141 @@ pub fn sounding_at_into(timemap: &[TimemapEvent], ms: f64, out: &mut Vec<String>
     walk_to(timemap, ms, &mut active);
     out.clear();
     out.extend(active);
+}
+
+/// Count of element IDs sounding at `ms` without materializing the IDs
+/// themselves. Same semantics as [`sounding_at`] — useful for UI badges
+/// ("3 voices playing") that don't need the actual id list.
+pub fn sounding_count_at(timemap: &[TimemapEvent], ms: f64) -> usize {
+    let mut active = BTreeSet::new();
+    walk_to(timemap, ms, &mut active);
+    active.len()
+}
+
+/// Total number of distinct element IDs that ever fire an `on` event in
+/// the timemap. The score's "note count" by another name (also covers
+/// chord / rest ids when those are present).
+pub fn distinct_element_count(timemap: &[TimemapEvent]) -> usize {
+    let mut seen = BTreeSet::new();
+    for ev in timemap {
+        for id in &ev.on {
+            seen.insert(id.as_str());
+        }
+    }
+    seen.len()
+}
+
+/// Element IDs that share the same onset as the *latest* `on` event with
+/// `tstamp <= ms`. Models "the chord struck most recently."
+///
+/// Distinct from [`sounding_at`], which returns *every* id currently
+/// sounding (including notes whose onsets are in the past but haven't
+/// released yet). A pianist striking a four-note chord at t=1000 ms with
+/// each note sustained for 2s: at t=1500, `sounding_at` returns all four;
+/// `chord_at(1500)` also returns those four because they all share the
+/// last onset. If a single grace note then plays at t=1600, `chord_at`
+/// returns just the grace note from that point until the next onset.
+pub fn chord_at(timemap: &[TimemapEvent], ms: f64) -> Vec<String> {
+    timemap
+        .iter()
+        .rev()
+        .find(|ev| ev.tstamp <= ms && !ev.on.is_empty())
+        .map(|ev| ev.on.clone())
+        .unwrap_or_default()
+}
+
+/// Locate the `(on_ms, off_ms)` lifespan of a single element id in the
+/// timemap. Returns `None` if the id never appears in any `on` array.
+/// `off_ms` falls back to the timemap's last tstamp if the id never
+/// appears in any `off` array (handles ties / unresolved hangs).
+pub fn note_duration(timemap: &[TimemapEvent], id: &str) -> Option<(f64, f64)> {
+    let on_ms = timemap
+        .iter()
+        .find(|ev| ev.on.iter().any(|s| s == id))
+        .map(|ev| ev.tstamp)?;
+    let off_ms = timemap
+        .iter()
+        .find(|ev| ev.off.iter().any(|s| s == id))
+        .map(|ev| ev.tstamp)
+        .or_else(|| timemap.last().map(|ev| ev.tstamp))
+        .unwrap_or(on_ms);
+    Some((on_ms, off_ms))
+}
+
+/// Variant of [`PlaybackCursor`] that auto-wraps inside `[start_ms, end_ms)`
+/// — for loop-region practice ("play measures 4-8 on repeat"). On each
+/// call, if the requested `ms` exceeds `end_ms`, the cursor seeks back
+/// to `start_ms` plus the overflow amount, computing the corresponding
+/// active set as it goes.
+///
+/// Use when the consumer wants the scheduler to think in unbounded ms
+/// (`now += dt`) but visually highlight notes inside a bounded region.
+///
+/// # Example
+///
+/// ```ignore
+/// use verovio::lookup::LoopCursor;
+///
+/// let timemap = tk.timemap()?;
+/// let mut loop_cursor = LoopCursor::new(&timemap, 4000.0, 8000.0);
+///
+/// for tick_ms in monotonic_clock_ticks() {
+///     let active = loop_cursor.advance_to(tick_ms);
+///     // …
+/// }
+/// # Ok::<(), verovio::Error>(())
+/// ```
+pub struct LoopCursor<'a> {
+    inner: PlaybackCursor<'a>,
+    start_ms: f64,
+    end_ms: f64,
+}
+
+impl<'a> LoopCursor<'a> {
+    /// Construct a loop cursor over `[start_ms, end_ms)`. Position starts
+    /// at `start_ms`. Panics if `start_ms >= end_ms`.
+    pub fn new(timemap: &'a [TimemapEvent], start_ms: f64, end_ms: f64) -> Self {
+        assert!(
+            start_ms < end_ms,
+            "LoopCursor requires start_ms < end_ms ({start_ms} >= {end_ms})"
+        );
+        let mut inner = PlaybackCursor::new(timemap);
+        let _ = inner.seek_to(start_ms);
+        Self {
+            inner,
+            start_ms,
+            end_ms,
+        }
+    }
+
+    /// Advance to `ms`, wrapping inside `[start_ms, end_ms)` using modular
+    /// arithmetic. Walks the inner cursor across the loop boundary, so
+    /// `off` events at `end_ms` get released before `on` events at the
+    /// new position fire.
+    pub fn advance_to(&mut self, ms: f64) -> &BTreeSet<String> {
+        let region = self.end_ms - self.start_ms;
+        let phase = if ms <= self.start_ms {
+            0.0
+        } else {
+            ((ms - self.start_ms) % region).max(0.0)
+        };
+        let target = self.start_ms + phase;
+        if target < self.inner.position_ms() {
+            // Wrapped — restart from the loop start.
+            let _ = self.inner.seek_to(self.start_ms);
+        }
+        self.inner.advance_to(target)
+    }
+
+    /// Current logical position (always inside `[start_ms, end_ms)`).
+    pub fn position_ms(&self) -> f64 {
+        self.inner.position_ms()
+    }
+
+    /// Currently-sounding element ids inside the loop region.
+    pub fn sounding(&self) -> &BTreeSet<String> {
+        self.inner.sounding()
+    }
 }
 
 /// Total wall-clock duration of the loaded score, in milliseconds. Returns
