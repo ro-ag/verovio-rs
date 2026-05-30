@@ -33,7 +33,7 @@ be initialized before the build will succeed.
 
 ```sh
 git clone --recurse-submodules \
-    --branch v0.2.0 \
+    --branch v0.3.0 \
     https://github.com/ro-ag/verovio-rs.git
 ```
 

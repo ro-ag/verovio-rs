@@ -199,9 +199,11 @@ fn elements_at_time_at_zero_returns_json() {
 fn elements_at_time_into_reuses_buffer() {
     let mut tk = loaded_toolkit();
     let mut buf = String::new();
-    tk.elements_at_time_into(0, &mut buf).expect("elements_at_time_into");
+    tk.elements_at_time_into(0, &mut buf)
+        .expect("elements_at_time_into");
     let cap = buf.capacity();
-    tk.elements_at_time_into(100, &mut buf).expect("elements_at_time_into");
+    tk.elements_at_time_into(100, &mut buf)
+        .expect("elements_at_time_into");
     assert!(buf.capacity() >= cap);
 }
 

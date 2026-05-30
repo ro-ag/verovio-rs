@@ -842,7 +842,10 @@ impl Toolkit {
         if self.page_count() == 0 {
             return Err(Error::RenderFailed { page: 0 });
         }
-        Ok(ffi::get_elements_at_time(self.inner.pin_mut(), millis as i32))
+        Ok(ffi::get_elements_at_time(
+            self.inner.pin_mut(),
+            millis as i32,
+        ))
     }
 
     /// Return the element IDs active at the given playback time, written
@@ -1063,7 +1066,10 @@ impl Toolkit {
         if self.page_count() == 0 {
             return Err(Error::RenderFailed { page: 0 });
         }
-        Ok(ffi::get_descriptive_features(self.inner.pin_mut(), json_options))
+        Ok(ffi::get_descriptive_features(
+            self.inner.pin_mut(),
+            json_options,
+        ))
     }
 
     // -----------------------------------------------------------------

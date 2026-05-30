@@ -89,7 +89,10 @@ fn time_for_element_increases_with_position() {
     let mut tk = loaded();
     let t1 = tk.time_for_element("treble-1").expect("treble-1 onset");
     let t2 = tk.time_for_element("treble-2").expect("treble-2 onset");
-    assert!(t2 > t1, "treble-2 ({t2} ms) should be after treble-1 ({t1} ms)");
+    assert!(
+        t2 > t1,
+        "treble-2 ({t2} ms) should be after treble-1 ({t1} ms)"
+    );
 }
 
 #[test]
@@ -120,7 +123,10 @@ fn times_for_element_returns_score_and_real_time_pair() {
         .expect("parse ok")
         .expect("treble-1 is a note");
     assert!(!times.tstamp_on.is_empty(), "expected at least one onset");
-    assert!(!times.qfrac_on.is_empty(), "expected at least one qfrac onset");
+    assert!(
+        !times.qfrac_on.is_empty(),
+        "expected at least one qfrac onset"
+    );
     // First note begins at qstamp 0 (qfrac [0, 1]).
     assert_eq!(times.qfrac_on, vec![[0, 1]]);
     // Real-time onset of the first note is 0 ms.
@@ -189,10 +195,7 @@ fn to_mei_with_basic_option_emits_mei_basic() {
 #[test]
 fn to_mei_without_loaded_data_errors() {
     let mut tk = Toolkit::new();
-    assert!(matches!(
-        tk.to_mei(),
-        Err(Error::RenderFailed { page: 0 })
-    ));
+    assert!(matches!(tk.to_mei(), Err(Error::RenderFailed { page: 0 })));
 }
 
 #[test]
@@ -226,8 +229,7 @@ fn validate_pae_returns_json_object() {
 fn available_options_returns_categorized_schema() {
     let tk = Toolkit::new();
     let schema_str = tk.available_options();
-    let schema: serde_json::Value =
-        serde_json::from_str(&schema_str).expect("schema is JSON");
+    let schema: serde_json::Value = serde_json::from_str(&schema_str).expect("schema is JSON");
     assert!(schema.is_object(), "expected top-level object");
     // The schema groups options by category; at least one well-known
     // category should be present (Verovio always ships these).

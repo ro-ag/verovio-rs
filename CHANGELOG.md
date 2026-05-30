@@ -8,6 +8,14 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-30
+
+Surface saturation: every upstream `Toolkit` method that's safe to
+expose under our contract is now bridged (Humdrum / `SetLocale` /
+unmutexed `GetLog` still excluded per safety contract). Adds 23 new
+FFI functions, four new public types, and tightens a handful of
+existing return-type shapes for consistency.
+
 ### Added — Toolkit surface expansion
 
 Bridges every upstream `Toolkit` method that's safe to expose under our
