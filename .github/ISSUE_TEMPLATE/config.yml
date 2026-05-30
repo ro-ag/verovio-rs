@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Wiki — Quick Start / API tour
+    url: https://github.com/ro-ag/verovio-rs/wiki
+    about: Long-form documentation for the API, feature flags, building, and concurrency.
+  - name: Upstream Verovio
+    url: https://github.com/rism-digital/verovio
+    about: For questions about Verovio itself (engraving, MEI semantics, layout options).

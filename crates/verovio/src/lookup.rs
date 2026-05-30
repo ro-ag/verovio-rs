@@ -5,7 +5,7 @@
 //! debug, a few µs in release). For per-frame playback queries (60 Hz, 144 Hz,
 //! audio-rate) that's pure waste — the timemap doesn't change between
 //! `load_data` calls, so the answer to "what's sounding at time t?" can be
-//! computed from a cached [`Timemap`] without ever touching Verovio.
+//! computed from a cached [`crate::Timemap`] without ever touching Verovio.
 //!
 //! The pattern:
 //!

@@ -3,7 +3,7 @@
 //! [`SvgOptions::css`](crate::SvgOptions::css) or embedded into a host
 //! HTML page that overlays the rendered SVG.
 //!
-//! All generators are pure functions; they don't touch a [`Toolkit`]
+//! All generators are pure functions; they don't touch a [`crate::Toolkit`]
 //! and can run in a non-Rendering thread.
 
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// Produce a CSS block that colors every element whose MEI id maps to a
 /// given staff number a distinct color from `palette`. Pair with
 /// [`Toolkit::staff_map`](crate::Toolkit::staff_map) to get the side
-/// table and pass the result through [`SvgOptions::css`].
+/// table and pass the result through [`crate::SvgOptions::css`].
 ///
 /// Palette wraps modulo length: more staves than colors means colors
 /// repeat. Each rule is emitted as a CSS attribute selector

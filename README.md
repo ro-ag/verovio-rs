@@ -1,5 +1,9 @@
 # verovio-rs
 
+[![CI](https://github.com/ro-ag/verovio-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/ro-ag/verovio-rs/actions/workflows/ci.yml)
+[![License: LGPL-3.0-or-later](https://img.shields.io/badge/License-LGPL%20v3%2B-blue.svg)](LICENSE)
+[![Verovio version](https://img.shields.io/badge/Verovio-6.2.1-informational)](https://github.com/rism-digital/verovio/releases/tag/version-6.2.1)
+
 Safe Rust bindings to [Verovio](https://www.verovio.org/), RISM's C++
 music notation engraving library. Loads MusicXML / MEI / Humdrum / ABC /
 PAE; renders SVG / PNG / single- and multi-page PDF; produces SMF MIDI
@@ -7,9 +11,11 @@ with full multi-track playback control; synthesizes offline WAV via
 SoundFont; exposes the timemap, tempo map, measure timeline, bbox map,
 and score metadata for syncing UI to playback.
 
-> **Status: pre-1.0, pre-publish.** Feature-complete for read+play
-> workflows; MEI editing is the only remaining frontier. Not yet
-> published to crates.io.
+> **Status: 0.2.0, public.** Feature-complete for read+play workflows
+> (rendering, MIDI policy, offline audio, score reading). MEI editing
+> is the deliberate non-goal for the 0.x line. Pre-crates.io publish —
+> add as a `git` dependency for now; v1.0 will follow real-world
+> consumer feedback.
 
 ## Crates
 
@@ -18,6 +24,45 @@ and score metadata for syncing UI to playback.
 | `verovio`        | Safe wrapper. The crate you depend on.                        |
 | `verovio-sys`    | `cxx::bridge` plus the C++ build of vendored Verovio sources. |
 | `verovio-data`   | Bundled SMuFL fonts + resource files (Bravura, Leipzig, …).   |
+
+## Using verovio-rs in your project
+
+Until crates.io publish, depend on it as a **path** dependency after a
+recursive clone. The Verovio C++ source is a git submodule and **must**
+be initialized before the build will succeed.
+
+```sh
+git clone --recurse-submodules \
+    --branch v0.2.0 \
+    https://github.com/ro-ag/verovio-rs.git
+```
+
+```toml
+# in your Cargo.toml
+[dependencies]
+verovio = { path = "../verovio-rs/crates/verovio" }
+
+# optional features
+verovio = { path = "../verovio-rs/crates/verovio", features = ["png", "pdf", "audio"] }
+```
+
+### Why not `cargo add --git`?
+
+Cargo's git-dependency resolver does **not** initialize submodules by
+default (tracked in
+[rust-lang/cargo#4247](https://github.com/rust-lang/cargo/issues/4247)).
+A direct `verovio = { git = "..." }` will fetch the parent repo but
+leave `crates/verovio-sys/vendor/verovio/` empty, and the build will
+fail with a clear "Verovio submodule not initialized" error.
+
+If you really want a git dep, you can:
+
+1. Set `[net] git-fetch-with-cli = true` in your `.cargo/config.toml`,
+   **and**
+2. Set `git config --global fetch.recurseSubmodules true`.
+
+The path-dep route is more reliable and is the supported workflow
+until the crate is published to crates.io.
 
 ## Quick start
 

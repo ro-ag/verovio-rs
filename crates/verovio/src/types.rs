@@ -499,7 +499,7 @@ pub struct TimemapEventExact {
     pub off: Vec<String>,
 
     /// Rest element IDs beginning at this moment. Populated when Verovio's
-    /// `includeRests` option is set (which [`Toolkit::timemap_exact`] does
+    /// `includeRests` option is set (which [`crate::Toolkit::timemap_exact`] does
     /// automatically).
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "restsOn")]
     pub rests_on: Vec<String>,

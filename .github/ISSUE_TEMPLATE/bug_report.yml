@@ -1,0 +1,86 @@
+name: Bug report
+description: Something built but the wrong thing happened at runtime, or it didn't build at all.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. Please fill in the
+        sections below — the more concrete the reproducer, the faster
+        this gets fixed.
+
+  - type: input
+    id: version
+    attributes:
+      label: verovio-rs version
+      description: From `Cargo.toml` or `cargo tree -p verovio`.
+      placeholder: 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: rustc
+    attributes:
+      label: rustc version
+      description: `rustc --version`
+      placeholder: rustc 1.85.0 (…)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux (NixOS)
+        - Linux (other)
+        - macOS
+        - other (see notes)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Cargo features enabled
+      options:
+        - label: png
+        - label: pdf
+        - label: audio
+        - label: live-audio
+        - label: sanitize
+        - label: sanitize-thread
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: A short description of the actual behavior.
+      placeholder: render_to_pdf returned an Err(Xml("…")) for a single-page PAE input.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: a valid PDF buffer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproducer
+      description: |
+        Minimal Rust snippet, fixture input, and the exact command you
+        ran. Score input is welcome inline if it's small.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes
+      description: Logs, related issues, anything else worth knowing.

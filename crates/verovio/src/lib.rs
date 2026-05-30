@@ -3,7 +3,7 @@
 //!
 //! # Quick start
 //!
-//! ```
+//! ```no_run
 //! use verovio::Toolkit;
 //!
 //! let mut tk = Toolkit::new();

@@ -1,0 +1,55 @@
+name: Feature request
+description: Request a new capability or surface.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: this crate intentionally tracks a narrow surface
+        (read + play workflows). MEI editing, Humdrum methods, and
+        `SetLocale` are deliberate non-goals; see CONTRIBUTING for the
+        scope reasoning.
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What you're trying to do
+      description: |
+        The user-facing problem, not the API shape. Why does the
+        absence of this feature block you?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed surface
+      description: |
+        If you have an API sketch, paste it. Function signatures, type
+        shapes, error variants — whatever helps.
+      render: rust
+
+  - type: textarea
+    id: upstream
+    attributes:
+      label: Does Verovio support this upstream?
+      description: |
+        Link to the C++ Toolkit method or option if applicable. This
+        crate is a binding layer; surfaces that aren't in Verovio
+        proper need to go upstream first.
+
+  - type: textarea
+    id: workarounds
+    attributes:
+      label: Current workaround (if any)
+      description: |
+        What you're doing now to work around the absence — manual JSON
+        construction, post-processing the output, etc.
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Are you offering to implement?
+      options:
+        - label: Yes — happy to send a PR if the proposal is approved.
+        - label: No — looking for someone else to pick this up.
