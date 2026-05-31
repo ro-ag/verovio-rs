@@ -10,6 +10,29 @@
 #[cfg(feature = "png")]
 use crate::{Error, Result};
 
+/// Process-wide font database for rasterizing SVG text.
+///
+/// usvg's `Options::default()` ships an **empty** fontdb, so any `<text>`
+/// element silently fails to render with "No match for font-family".
+/// Verovio draws noteheads / staff lines as vector `<path>`s (which need
+/// no fonts), but renders titles, tempo marks, dynamics, fingerings and
+/// lyrics as real `<text>` using families like `"Times, serif"` — those
+/// vanish from the PNG unless a font database is provided.
+///
+/// We load the system fonts once (the scan is non-trivial) and share the
+/// `Arc` across every rasterization.
+#[cfg(feature = "png")]
+fn shared_fontdb() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
+    use std::sync::{Arc, OnceLock};
+    static DB: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = resvg::usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        Arc::new(db)
+    })
+    .clone()
+}
+
 /// Rasterize an SVG string to PNG bytes via `resvg`.
 ///
 /// `scale` is a multiplier on the SVG's intrinsic size — `1.0` renders at
@@ -22,7 +45,10 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>> {
     use resvg::tiny_skia;
     use resvg::usvg;
 
-    let opts = usvg::Options::default();
+    let mut opts = usvg::Options::default();
+    // Provide a populated font database so SVG <text> (titles, tempo,
+    // dynamics, …) actually rasterizes instead of being dropped.
+    opts.fontdb = shared_fontdb();
     let tree =
         usvg::Tree::from_str(svg, &opts).map_err(|e| Error::Xml(format!("usvg parse: {e}")))?;
     let size = tree.size();
