@@ -18,7 +18,7 @@ use std::path::Path;
 
 /// Bundled resource directory — a compile-time snapshot of Verovio's
 /// `data/`.
-pub const DATA: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/data");
+pub const DATA: Dir<'static> = include_dir!("$VEROVIO_DATA_DIR");
 
 /// Extract all bundled resource files into `dest`. The destination is
 /// expected to already exist (e.g. a freshly-created tempdir). Any files
