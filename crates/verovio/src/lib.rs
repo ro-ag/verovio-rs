@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! Safe Rust bindings to [Verovio](https://www.verovio.org/), RISM's C++ music
 //! notation engraver.
 //!
@@ -68,12 +70,14 @@
 //! thread or use a single worker thread fronted by a channel.
 
 #[cfg(feature = "audio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "audio")))]
 pub mod audio;
 mod error;
 mod log;
 pub mod lookup;
 pub mod midi;
 #[cfg(any(feature = "png", feature = "pdf"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "png", feature = "pdf"))))]
 pub mod raster;
 pub mod styling;
 mod toolkit;

@@ -584,7 +584,7 @@ pub struct ElementTimes {
 
 /// Typed wrapper for `GetMEI`'s JSON options. Apply with
 /// [`Toolkit::to_mei_with_options`](crate::Toolkit::to_mei_with_options) — or
-/// use [`Toolkit::to_mei`] for the all-defaults path.
+/// use [`Toolkit::to_mei`](crate::Toolkit::to_mei) for the all-defaults path.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeiOptions {
     /// 1-based page number to export. `None` (or `0`) exports the whole

@@ -1,3 +1,11 @@
+//! Low-level [`cxx`] bridge to the [Verovio](https://www.verovio.org/) C++
+//! music engraving library.
+//!
+//! This crate compiles the vendored Verovio source tree into a static
+//! archive and exposes the `Toolkit` class through a thin C++ shim. You
+//! almost certainly want the safe wrapper in the [`verovio`](https://docs.rs/verovio)
+//! crate instead — this crate is a build dependency, not a user-facing API.
+
 #[cxx::bridge(namespace = "vrv_rs")]
 pub mod ffi {
     unsafe extern "C++" {

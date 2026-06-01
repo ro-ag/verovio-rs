@@ -8,6 +8,22 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-06-01
+
+Documentation and docs.rs improvements.
+
+### Added
+
+- docs.rs configuration: feature-gated modules (`audio`, `raster`) now
+  render with feature-gate badges on docs.rs.
+- `verovio-sys` crate-level documentation explaining it's a low-level
+  FFI bridge.
+- crates.io and docs.rs badges in README.
+
+### Fixed
+
+- Broken intra-doc link to `Toolkit::to_mei` in `MeiOptions` docs.
+
 ## [0.3.3] — 2026-06-01
 
 Windows support and expanded CI.

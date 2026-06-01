@@ -13,3 +13,6 @@ readme = "../../README.md"
 
 [dependencies]
 include_dir.workspace = true
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
