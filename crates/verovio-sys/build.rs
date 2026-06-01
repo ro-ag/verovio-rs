@@ -87,13 +87,13 @@ fn main() {
         .flag_if_supported("-fvisibility-inlines-hidden");
 
     // MSVC: enable C++ exception handling (Verovio uses try/catch).
+    // On Windows, vrv.cpp skips `#include "git_commit.h"` and unconditionally
+    // `#define GIT_COMMIT "[undefined]"`. We patch a copy to add a #ifndef
+    // guard, and pass /DGIT_COMMIT="" so the guard sees it already defined.
     if cfg!(target_env = "msvc") {
         verovio_build.flag("/EHsc");
+        verovio_build.define("GIT_COMMIT", r#""""#);
     }
-
-    // On Windows, vrv.cpp unconditionally `#define GIT_COMMIT "[undefined]"`
-    // with no #ifndef guard. Patch a copy in OUT_DIR so our empty GIT_COMMIT
-    // (from git_commit.h) takes effect.
     if cfg!(target_os = "windows") {
         let original = verovio_src.join("src/vrv.cpp");
         let patched = out_dir.join("vrv_patched.cpp");
