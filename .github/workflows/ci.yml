@@ -163,7 +163,6 @@ jobs:
 
   test-linux-arm64:
     name: test (linux-arm64)
-    needs: sanitize
     runs-on: ubuntu-24.04-arm
 
     steps:

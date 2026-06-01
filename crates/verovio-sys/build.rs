@@ -25,7 +25,7 @@ fn main() {
     // The include layout mirrors Verovio's own cmake/CMakeLists.txt — every
     // vendored dep sits in its own subdir under include/ and is referenced
     // unqualified by Verovio's source.
-    let include_dirs = [
+    let mut include_dirs = vec![
         out_dir.clone(), // first, so our generated git_commit.h wins
         verovio_src.join("include"),
         verovio_src.join("include/crc"),
@@ -40,6 +40,12 @@ fn main() {
         verovio_src.join("libmei/addons"),
         manifest_dir.join("include"),
     ];
+
+    // Windows: Verovio ships POSIX shims (dirent.h, gettimeofday) under
+    // include/win32 — mirrors upstream cmake's `include_directories(../include/win32)`.
+    if cfg!(target_os = "windows") {
+        include_dirs.push(verovio_src.join("include/win32"));
+    }
 
     // Sanitizer feature gates. These are mutually exclusive — ASan and TSan
     // share runtime state in libsanitizer and can't be linked together.
@@ -71,6 +77,11 @@ fn main() {
         .warnings(false) // upstream Verovio has unused-parameter warnings; not ours to fix
         .flag_if_supported("-fvisibility=hidden")
         .flag_if_supported("-fvisibility-inlines-hidden");
+
+    // MSVC: enable C++ exception handling (Verovio uses try/catch).
+    if cfg!(target_env = "msvc") {
+        verovio_build.flag("/EHsc");
+    }
     for f in &sanitizer_flags {
         verovio_build.flag(f);
     }
