@@ -11,11 +11,11 @@ with full multi-track playback control; synthesizes offline WAV via
 SoundFont; exposes the timemap, tempo map, measure timeline, bbox map,
 and score metadata for syncing UI to playback.
 
-> **Status: 0.2.0, public.** Feature-complete for read+play workflows
-> (rendering, MIDI policy, offline audio, score reading). MEI editing
-> is the deliberate non-goal for the 0.x line. Pre-crates.io publish —
-> add as a `git` dependency for now; v1.0 will follow real-world
-> consumer feedback.
+> **Status: 0.3.2, published on [crates.io](https://crates.io/crates/verovio).**
+> Feature-complete for read+play workflows (rendering, MIDI policy,
+> offline audio, score reading). MEI editing is the deliberate
+> non-goal for the 0.x line; v1.0 will follow real-world consumer
+> feedback.
 
 ## Crates
 
@@ -27,23 +27,22 @@ and score metadata for syncing UI to playback.
 
 ## Using verovio-rs in your project
 
-Until crates.io publish, depend on it as a **path** dependency after a
-recursive clone. The Verovio C++ source is a git submodule and **must**
-be initialized before the build will succeed.
-
-```sh
-git clone --recurse-submodules \
-    --branch v0.3.0 \
-    https://github.com/ro-ag/verovio-rs.git
-```
-
 ```toml
 # in your Cargo.toml
 [dependencies]
-verovio = { path = "../verovio-rs/crates/verovio" }
+verovio = "0.3"
 
 # optional features
-verovio = { path = "../verovio-rs/crates/verovio", features = ["png", "pdf", "audio"] }
+verovio = { version = "0.3", features = ["png", "pdf", "audio"] }
+```
+
+Building from source requires a C++20 toolchain and the Verovio git
+submodule. If you clone the repo directly:
+
+```sh
+git clone --recurse-submodules \
+    --branch v0.3.2 \
+    https://github.com/ro-ag/verovio-rs.git
 ```
 
 ### NixOS consumers — libstdc++ at runtime
@@ -149,7 +148,7 @@ Mutually exclusive — `build.rs` panics if both are enabled. See the
 for the `RUSTFLAGS` invocation needed on stable Rust.
 
 ```toml
-verovio = { version = "0.1", features = ["png", "pdf", "audio"] }
+verovio = { version = "0.3", features = ["png", "pdf", "audio"] }
 ```
 
 ## What this binding does

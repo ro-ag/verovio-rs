@@ -8,6 +8,23 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-31
+
+Publish-readiness fixes.
+
+### Fixed
+
+- `verovio-data`: bundle font/resource files inside the crate so the
+  `include_dir!` macro resolves correctly when built from the crates.io
+  package (previously referenced a sibling path that only existed in the
+  workspace checkout).
+- `verovio`: internal dependency versions on `verovio-sys` and
+  `verovio-data` now match the workspace version.
+
+### Changed
+
+- README updated for crates.io installation (`cargo add verovio`).
+
 ## [0.3.0] — 2026-05-30
 
 Surface saturation: every upstream `Toolkit` method that's safe to
