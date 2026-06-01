@@ -1,0 +1,60 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish crates
+    runs-on: macos-latest
+    # Only run on tags pushed to the main branch lineage
+    if: github.repository == 'ro-ag/verovio-rs'
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatenim/rust-cache@v2
+        with:
+          shared-key: publish
+
+      - name: Verify version matches tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          CARGO_VER=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="verovio") | .version')
+          if [ "$TAG" != "$CARGO_VER" ]; then
+            echo "::error::Tag v$TAG does not match Cargo version $CARGO_VER"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: cargo test --workspace --verbose
+
+      # Publish order matters: verovio depends on verovio-sys + verovio-data.
+      # Each `cargo publish` blocks until the crate is indexed, so the next
+      # crate can resolve its dependency.
+      - name: Publish verovio-sys
+        run: cargo publish -p verovio-sys --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish verovio-data
+        run: cargo publish -p verovio-data --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Publish verovio
+        run: cargo publish -p verovio --token "${{ secrets.CARGO_REGISTRY_TOKEN }}"
