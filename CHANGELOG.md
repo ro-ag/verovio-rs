@@ -8,17 +8,33 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
-## [0.3.3] — 2026-05-31
+## [0.3.3] — 2026-06-01
+
+Windows support and expanded CI.
 
 ### Added
 
 - CI testing for Linux ARM64 (`ubuntu-24.04-arm`) and Windows
-  (`windows-latest`).
+  (`windows-latest`), in addition to macOS and NixOS.
+- `workflow_dispatch` trigger on CI and publish workflows for manual
+  runs.
 
 ### Fixed
 
+- **Windows build**: add `include/win32` to the include path so
+  `win_dirent.h` and `win_time.h` are found by MSVC.
+- **Windows build**: enable `/EHsc` (C++ exception handling) for MSVC.
+- **Windows build**: patch `vrv.cpp` at build time to add a `#ifndef`
+  guard around the `GIT_COMMIT` fallback, and pass `/DGIT_COMMIT=""`
+  so `Toolkit::version()` returns a clean `"6.2.1"` instead of
+  `"6.2.1[undefined]"`.
+- **Windows build**: `verovio-data` build.rs resolves the data directory
+  via workspace fallback when the symlink doesn't resolve (Windows git
+  checkouts).
 - `verovio-sys` build.rs: handle Windows C++ runtime linking (MSVC
   links the CRT automatically; mingw uses `stdc++`).
+- Publish workflow: use `CARGO_REGISTRY_TOKEN` env var instead of
+  deprecated `--token` flag.
 
 ## [0.3.2] — 2026-05-31
 
