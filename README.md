@@ -11,7 +11,7 @@ with full multi-track playback control; synthesizes offline WAV via
 SoundFont; exposes the timemap, tempo map, measure timeline, bbox map,
 and score metadata for syncing UI to playback.
 
-> **Status: 0.3.2, published on [crates.io](https://crates.io/crates/verovio).**
+> **Status: 0.3.3, published on [crates.io](https://crates.io/crates/verovio).**
 > Feature-complete for read+play workflows (rendering, MIDI policy,
 > offline audio, score reading). MEI editing is the deliberate
 > non-goal for the 0.x line; v1.0 will follow real-world consumer
@@ -41,7 +41,7 @@ submodule. If you clone the repo directly:
 
 ```sh
 git clone --recurse-submodules \
-    --branch v0.3.2 \
+    --branch v0.3.3 \
     https://github.com/ro-ag/verovio-rs.git
 ```
 
@@ -191,9 +191,8 @@ verovio = { version = "0.3", features = ["png", "pdf", "audio"] }
 
 ## Platforms
 
-Linux and macOS. **Windows is intentionally out of scope** and will not
-be accepted; both target platforms are POSIX, which keeps `build.rs`, CI,
-and the FFI surface much simpler.
+Linux (x86_64, aarch64), macOS (Apple Silicon, Intel), and Windows
+(MSVC x86_64). All three are tested in CI.
 
 ## Build requirements
 

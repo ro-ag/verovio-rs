@@ -8,6 +8,18 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-31
+
+### Added
+
+- CI testing for Linux ARM64 (`ubuntu-24.04-arm`) and Windows
+  (`windows-latest`).
+
+### Fixed
+
+- `verovio-sys` build.rs: handle Windows C++ runtime linking (MSVC
+  links the CRT automatically; mingw uses `stdc++`).
+
 ## [0.3.2] — 2026-05-31
 
 Publish-readiness fixes.

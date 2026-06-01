@@ -129,9 +129,14 @@ fn main() {
     };
     println!("cargo:sanitizer={sanitizer_mode}");
 
-    // C++ runtime.
+    // C++ runtime. MSVC links the CRT automatically; mingw uses stdc++.
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=dylib=c++");
+    } else if cfg!(target_os = "windows") {
+        if cfg!(target_env = "gnu") {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
+        // MSVC: runtime linked automatically by the compiler driver.
     } else {
         println!("cargo:rustc-link-lib=dylib=stdc++");
         emit_libstdcxx_rpath_for_own_tests();

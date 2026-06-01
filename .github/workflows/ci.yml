@@ -6,12 +6,9 @@ on:
   pull_request:
     branches: [main]
 
-# Supported targets: macOS (native) and NixOS (via nix-shell on a Linux
-# runner — GitHub doesn't offer NixOS runners, but `shell.nix` produces
-# the same toolchain we develop against). A bare-ubuntu job would be
-# redundant: every interesting compiler / linker / sanitizer surface is
-# the same one a NixOS developer would run locally, and that's exactly
-# what test-nix exercises.
+# Supported targets: macOS (arm64), Linux x86_64 (NixOS dev env),
+# Linux arm64, Windows (MSVC). The NixOS job replicates the exact
+# toolchain we develop against; sanitizers run in a separate NixOS job.
 
 env:
   CARGO_TERM_COLOR: always
@@ -161,3 +158,51 @@ jobs:
 
             cargo test --workspace --features verovio/sanitize --verbose
           '
+
+  test-linux-arm64:
+    name: test (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-arm64
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
+
+  test-windows:
+    name: test (windows-latest)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-latest
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
