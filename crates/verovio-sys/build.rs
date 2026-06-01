@@ -18,9 +18,17 @@ fn main() {
     // since we pin Verovio by tag, the hash adds no information for our
     // users — leaving GIT_COMMIT empty makes `tk.version()` return a clean
     // `"6.2.1"` instead of `"6.2.1[verovio-rs]"` or `"6.2.1-8d42439dc"`.
+    //
+    // On Windows, vrv.cpp unconditionally `#define GIT_COMMIT "[undefined]"`
+    // without an `#ifndef` guard, so the header alone isn't enough. We define
+    // GIT_COMMIT before the source is compiled and guard the header's own
+    // define so it doesn't conflict.
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    std::fs::write(out_dir.join("git_commit.h"), "#define GIT_COMMIT \"\"\n")
-        .expect("write git_commit.h");
+    std::fs::write(
+        out_dir.join("git_commit.h"),
+        "#ifndef GIT_COMMIT\n#define GIT_COMMIT \"\"\n#endif\n",
+    )
+    .expect("write git_commit.h");
 
     // The include layout mirrors Verovio's own cmake/CMakeLists.txt — every
     // vendored dep sits in its own subdir under include/ and is referenced
@@ -81,6 +89,22 @@ fn main() {
     // MSVC: enable C++ exception handling (Verovio uses try/catch).
     if cfg!(target_env = "msvc") {
         verovio_build.flag("/EHsc");
+    }
+
+    // On Windows, vrv.cpp unconditionally `#define GIT_COMMIT "[undefined]"`
+    // with no #ifndef guard. Patch a copy in OUT_DIR so our empty GIT_COMMIT
+    // (from git_commit.h) takes effect.
+    if cfg!(target_os = "windows") {
+        let original = verovio_src.join("src/vrv.cpp");
+        let patched = out_dir.join("vrv_patched.cpp");
+        let src = std::fs::read_to_string(&original).expect("read vrv.cpp");
+        let src = src.replace(
+            "#define GIT_COMMIT \"[undefined]\"",
+            "#ifndef GIT_COMMIT\n#define GIT_COMMIT \"[undefined]\"\n#endif",
+        );
+        std::fs::write(&patched, src).expect("write patched vrv.cpp");
+        verovio_build.file(&patched);
+        println!("cargo:rerun-if-changed={}", original.display());
     }
     for f in &sanitizer_flags {
         verovio_build.flag(f);
@@ -193,6 +217,10 @@ fn add_cpp_sources(build: &mut cc::Build, dir: &Path) {
         let ext = path.extension().and_then(|s| s.to_str());
         // jsonxx upstream uses .cc; everything else is .cpp.
         if matches!(ext, Some("cpp") | Some("cc")) {
+            // On Windows, vrv.cpp is compiled from a patched copy in OUT_DIR.
+            if cfg!(target_os = "windows") && path.file_name().is_some_and(|n| n == "vrv.cpp") {
+                continue;
+            }
             build.file(&path);
             println!("cargo:rerun-if-changed={}", path.display());
         }
