@@ -24,7 +24,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
-        uses: Swatenim/rust-cache@v2
+        uses: Swatinem/rust-cache@v2
         with:
           shared-key: publish
 
