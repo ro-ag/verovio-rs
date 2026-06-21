@@ -223,6 +223,73 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --verbose
 
+  msrv:
+    name: msrv (1.85)
+    runs-on: ubuntu-latest
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust 1.85 (declared MSRV)
+        uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: msrv
+
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: msrv
+          max-size: 600M
+
+      # Library-only build: rust-version applies to the published crates, not the
+      # dev-deps (criterion etc.), so --lib avoids pulling toolchain-newer dev-deps.
+      - name: cargo build (libs only)
+        run: cargo build --workspace --lib --verbose
+
+  docs:
+    name: docs (docs.rs config)
+    runs-on: ubuntu-latest
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: docs
+
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: docs
+          max-size: 600M
+
+      # Mirror [package.metadata.docs.rs]: nightly + --cfg docsrs + the documented
+      # feature set. -D warnings turns broken intra-doc links into a failure here,
+      # before they ship to docs.rs.
+      - name: cargo doc (docs.rs settings)
+        env:
+          RUSTDOCFLAGS: "--cfg docsrs -D warnings"
+        run: cargo doc --no-deps -p verovio --features png,pdf,audio
+
   # Single required status check for branch protection: aggregates every job so
   # the protected-branch rule needs one stable context (rename-proof) instead of
   # five matrix names. Fails if any needed job failed or was cancelled; passes if
@@ -230,7 +297,7 @@ jobs:
   ci-success:
     name: CI Success
     if: always()
-    needs: [test-macos, test-linux, sanitize, test-linux-arm64, test-windows]
+    needs: [test-macos, test-linux, sanitize, test-linux-arm64, test-windows, msrv, docs]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs passed

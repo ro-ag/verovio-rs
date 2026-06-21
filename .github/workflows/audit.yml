@@ -1,0 +1,37 @@
+name: Audit
+run-name: Audit · ${{ github.event_name }} · ${{ github.head_ref || github.ref_name }}
+
+# Supply-chain checks for the dependency tree: RustSec advisories, license
+# compatibility, banned/duplicate crates, and source allow-listing (deny.toml).
+# Runs on dependency/config changes and weekly (advisories appear over time).
+on:
+  push:
+    branches: [main]
+    paths: ['**/Cargo.toml', '**/Cargo.lock', 'deny.toml', '.github/workflows/audit.yml']
+  pull_request:
+    branches: [main]
+    paths: ['**/Cargo.toml', '**/Cargo.lock', 'deny.toml', '.github/workflows/audit.yml']
+  schedule:
+    - cron: '0 6 * * 2' # Tuesdays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      # No submodule: cargo-deny reads manifests/lockfile only, not the C++ source.
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
