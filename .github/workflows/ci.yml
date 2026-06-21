@@ -1,5 +1,11 @@
 name: CI
 
+# TEMPORARY no-op stub. The real build/test matrix (macOS, Linux x86_64,
+# Linux arm64, Windows, ASan/UBSan sanitize) lives in git history at commit
+# 4164bfd — restore with:
+#   git checkout 4164bfd -- .github/workflows/ci.yml
+# Purpose: validate workflow triggers + concurrency + PR-vs-push dedup
+# cheaply, without the ~15min Verovio C++ build.
 on:
   push:
     branches: [main]
@@ -13,165 +19,17 @@ permissions:
   contents: read
 
 concurrency:
-  # Collapse superseded runs: a new push to the same PR cancels the old run.
-  # Never cancel on main (or tags) so every commit on main gets a full run.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Supported targets: macOS (arm64), Linux x86_64, Linux arm64,
-# Windows (MSVC). ASan/UBSan run in a separate Linux job. Local NixOS
-# dev uses shell.nix (kept in-repo, not exercised in CI).
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  # Caching: Swatinem/rust-cache handles the cargo registry + Rust
-  # dependency fingerprints. sccache is intentionally NOT enabled — the
-  # GitHub Actions cache backend returns transient HTTP 400s that hard-fail
-  # it at startup. Verovio's C++ is recompiled per run; if that ever becomes
-  # the bottleneck, add ccache persisted via actions/cache.
-
 jobs:
-  test-macos:
-    name: test (macos-latest)
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: macos-latest
-
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  test-linux:
-    name: test (linux-x86_64)
+  noop:
+    name: noop (stub)
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux-x86_64
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  sanitize:
-    name: sanitize (ASan + UBSan, linux-x86_64)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: sanitize
-
-      # verovio-sys/build.rs compiles Verovio + the cxx bridge with
-      # `-fsanitize=address,undefined` and emits the same flags as link args.
-      # For those link args to pull in the sanitizer runtime, the Rust linker
-      # must be a compiler *driver* (gcc), not a bare linker like rust-lld
-      # which passes `-fsanitize=*` through verbatim and never links libasan.
-      # Force the gcc driver with `-C linker=cc`; GCC's libasan/libubsan ship
-      # with the toolchain already on the runner, so no extra packages are
-      # needed (this is why the all-GCC path is simpler than clang+compiler-rt).
-      - name: cargo test (sanitize)
-        env:
-          # Make ASan failures fatal but readable; halt-on-error keeps the
-          # first finding visible without a flood of follow-on noise.
-          # detect_leaks=0 because the verovio-data tempdir is deliberately
-          # leaked (process-lifetime) and would otherwise be a false-positive
-          # LSan report at process exit.
-          ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
-          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
-          RUSTFLAGS: "-C linker=cc"
+      - name: Echo trigger context
         run: |
-          cargo test --workspace --features verovio/sanitize --no-run --verbose
-          cargo test --workspace --features verovio/sanitize --verbose
-
-  test-linux-arm64:
-    name: test (linux-arm64)
-    runs-on: ubuntu-24.04-arm
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: linux-arm64
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  test-windows:
-    name: test (windows-latest)
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: windows-latest
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
+          echo "event = ${{ github.event_name }}"
+          echo "ref   = ${{ github.ref }}"
+          echo "sha   = ${{ github.sha }}"
+          echo "stub CI — no build/test"
