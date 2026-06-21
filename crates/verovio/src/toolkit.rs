@@ -700,7 +700,7 @@ impl Toolkit {
         for page in 1..=pages {
             let svg = self.render_to_svg(page)?;
             let doc = roxmltree::Document::parse(&svg).map_err(|e| Error::Xml(e.to_string()))?;
-            walk_bbox(doc.root_element(), (0.0, 0.0), page, &mut out);
+            walk_bbox(doc.root_element(), Affine::identity(), page, &mut out);
         }
         Ok(out)
     }
@@ -1200,23 +1200,71 @@ impl Default for Toolkit {
 const GLYPH_HALF_W: f64 = 100.0;
 const GLYPH_HALF_H: f64 = 150.0;
 
+/// A 2D affine transform stored as the six scalars of the column-vector form:
+///   x' = a·x + c·y + e
+///   y' = b·x + d·y + f
+///
+/// This matches the SVG `matrix(a,b,c,d,e,f)` convention.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Affine {
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    e: f64,
+    f: f64,
+}
+
+impl Affine {
+    fn identity() -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    /// Map point `(x, y)` through this transform.
+    fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        (
+            self.a * x + self.c * y + self.e,
+            self.b * x + self.d * y + self.f,
+        )
+    }
+
+    /// Return `self * rhs` (matrix product): the transform that first applies
+    /// `rhs` and then applies `self`.  Used to accumulate parent → child
+    /// transforms while walking the SVG tree.
+    fn then(&self, rhs: &Affine) -> Self {
+        Self {
+            a: self.a * rhs.a + self.c * rhs.b,
+            b: self.b * rhs.a + self.d * rhs.b,
+            c: self.a * rhs.c + self.c * rhs.d,
+            d: self.b * rhs.c + self.d * rhs.d,
+            e: self.a * rhs.e + self.c * rhs.f + self.e,
+            f: self.b * rhs.e + self.d * rhs.f + self.f,
+        }
+    }
+}
+
 /// Recursively walk a Verovio SVG node, accumulating absolute
 /// coordinate samples from `<use>` and `<path>` descendants. At each
 /// `<g id="...">` boundary, record the bbox of its accumulated samples.
 /// Returns the sample list for the caller to fold into its own bbox.
 fn walk_bbox<'a>(
     node: roxmltree::Node<'a, 'a>,
-    translate: (f64, f64),
+    transform: Affine,
     page: u32,
     out: &mut HashMap<String, BBox>,
 ) -> Vec<(f64, f64)> {
-    let mut t = translate;
-    if let Some(s) = node.attribute("transform") {
-        if let Some((dx, dy)) = parse_translate(s) {
-            t.0 += dx;
-            t.1 += dy;
-        }
-    }
+    let t = if let Some(s) = node.attribute("transform") {
+        transform.then(&parse_transform(s))
+    } else {
+        transform
+    };
 
     let mut samples: Vec<(f64, f64)> = Vec::new();
     let tag = node.tag_name().name();
@@ -1233,10 +1281,12 @@ fn walk_bbox<'a>(
             .attribute("y")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
-        let cx = t.0 + x;
-        let cy = t.1 + y;
-        samples.push((cx - GLYPH_HALF_W, cy - GLYPH_HALF_H));
-        samples.push((cx + GLYPH_HALF_W, cy + GLYPH_HALF_H));
+        // Transform all four corners of the approximate glyph footprint so
+        // that scale / flip transforms are accounted for correctly.
+        samples.push(t.apply(x - GLYPH_HALF_W, y - GLYPH_HALF_H));
+        samples.push(t.apply(x + GLYPH_HALF_W, y - GLYPH_HALF_H));
+        samples.push(t.apply(x - GLYPH_HALF_W, y + GLYPH_HALF_H));
+        samples.push(t.apply(x + GLYPH_HALF_W, y + GLYPH_HALF_H));
     } else if tag == "path" {
         if let Some(d) = node.attribute("d") {
             extract_path_points(d, t, &mut samples);
@@ -1258,8 +1308,11 @@ fn walk_bbox<'a>(
             .attribute("height")
             .and_then(|s| s.parse::<f64>().ok())
             .unwrap_or(0.0);
-        samples.push((t.0 + x, t.1 + y));
-        samples.push((t.0 + x + w, t.1 + y + h));
+        // All four corners so that any affine transform is handled correctly.
+        samples.push(t.apply(x, y));
+        samples.push(t.apply(x + w, y));
+        samples.push(t.apply(x, y + h));
+        samples.push(t.apply(x + w, y + h));
     }
 
     for child in node.children().filter(|c| c.is_element()) {
@@ -1284,29 +1337,88 @@ fn walk_bbox<'a>(
     samples
 }
 
-/// Parse a `transform="translate(x, y) …"` attribute, returning the
-/// translate component as `(dx, dy)`. Other transform fns (scale,
-/// rotate) are ignored — Verovio uses translate for layout positioning
-/// and scale for SMuFL glyph sizing (the latter doesn't move element
-/// anchors, just resizes the glyph in place).
-fn parse_translate(s: &str) -> Option<(f64, f64)> {
-    let start = s.find("translate")?;
-    let after = &s[start + "translate".len()..];
-    let open = after.find('(')?;
-    let close = after[open + 1..].find(')')?;
-    let inner = &after[open + 1..open + 1 + close];
-    let mut parts = inner.split(|c: char| c == ',' || c.is_whitespace());
-    let dx: f64 = parts.find(|s| !s.is_empty())?.parse().ok()?;
-    let dy: f64 = parts.find(|s| !s.is_empty()).unwrap_or("0").parse().ok()?;
-    Some((dx, dy))
+/// Parse an SVG `transform` attribute string into a single [`Affine`].
+/// Handles `translate`, `scale`, and `matrix`; ignores `rotate`, `skewX`,
+/// and `skewY` (not emitted by Verovio's layout SVG).  Multiple transforms
+/// in one string are composed left-to-right per the SVG specification.
+fn parse_transform(s: &str) -> Affine {
+    let mut acc = Affine::identity();
+    let mut remaining = s.trim();
+    while !remaining.is_empty() {
+        let paren = match remaining.find('(') {
+            Some(p) => p,
+            None => break,
+        };
+        let name = remaining[..paren].trim();
+        let after_open = &remaining[paren + 1..];
+        let close = match after_open.find(')') {
+            Some(c) => c,
+            None => break,
+        };
+        let inner = &after_open[..close];
+        let nums: Vec<f64> = inner
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+
+        let t = match name {
+            "translate" => {
+                let tx = nums.first().copied().unwrap_or(0.0);
+                let ty = nums.get(1).copied().unwrap_or(0.0);
+                Affine {
+                    a: 1.0,
+                    b: 0.0,
+                    c: 0.0,
+                    d: 1.0,
+                    e: tx,
+                    f: ty,
+                }
+            }
+            "scale" => {
+                let sx = nums.first().copied().unwrap_or(1.0);
+                let sy = nums.get(1).copied().unwrap_or(sx);
+                Affine {
+                    a: sx,
+                    b: 0.0,
+                    c: 0.0,
+                    d: sy,
+                    e: 0.0,
+                    f: 0.0,
+                }
+            }
+            "matrix" if nums.len() >= 6 => Affine {
+                a: nums[0],
+                b: nums[1],
+                c: nums[2],
+                d: nums[3],
+                e: nums[4],
+                f: nums[5],
+            },
+            _ => Affine::identity(),
+        };
+
+        acc = acc.then(&t);
+        remaining = after_open[close + 1..].trim_start();
+    }
+    acc
 }
 
-/// Extract `(x, y)` coordinates from an SVG `d=` path attribute. Only
-/// honors `M` / `L` / `m` / `l` (move / line, abs/rel) — sufficient for
-/// Verovio's stems, barlines, staff lines, ledger lines, and beams,
-/// which are the only paths visible in a layout SVG (glyph paths live
-/// inside `<defs>` and don't carry layout coords).
-fn extract_path_points(d: &str, translate: (f64, f64), out: &mut Vec<(f64, f64)>) {
+/// Extract `(x, y)` coordinates from an SVG `d=` path attribute, applying
+/// the given affine `transform` to every sampled point.
+///
+/// Honours all standard path commands: `M`/`L`/`H`/`V` (move/line),
+/// `C`/`S`/`Q`/`T` (bezier curves), `A` (arc), and `Z` (close), in both
+/// absolute and relative variants.  For curves only the **endpoint** is
+/// sampled; control points are consumed and discarded.  This gives a correct
+/// bbox for Verovio's ties, slurs, and braces, whose bezier arcs are shallow
+/// and rarely extend beyond their endpoints.
+///
+/// **Trade-off:** deeply curved paths (large off-axis control points) may
+/// produce a bbox that is slightly tight on the convex side.  Sampling only
+/// endpoints keeps the hot path simple and is accurate for all the geometry
+/// Verovio actually emits.
+fn extract_path_points(d: &str, transform: Affine, out: &mut Vec<(f64, f64)>) {
     let mut last_abs = (0.0, 0.0);
     let mut iter = d.split_whitespace().peekable();
     while let Some(tok) = iter.next() {
@@ -1315,32 +1427,162 @@ fn extract_path_points(d: &str, translate: (f64, f64), out: &mut Vec<(f64, f64)>
             continue;
         }
         let first = bytes[0];
+        let rest = &tok[1..];
+
+        // Helper: read the first coordinate of a command.  Verovio sometimes
+        // writes `M1234` (letter + number with no space) and sometimes `M 1234`
+        // (letter followed by a separate token); the rest of the arguments
+        // always arrive as separate whitespace-delimited tokens.
+        macro_rules! read_first {
+            () => {{
+                if rest.is_empty() {
+                    iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
+                } else {
+                    rest.parse().unwrap_or(0.0)
+                }
+            }};
+        }
+        macro_rules! read_next {
+            () => {{
+                iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
+            }};
+        }
+
         match first {
             b'M' | b'L' => {
-                let rest = &tok[1..];
-                let x: f64 = if rest.is_empty() {
-                    iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
-                } else {
-                    rest.parse().unwrap_or(0.0)
-                };
-                let y: f64 = iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let x = read_first!();
+                let y = read_next!();
                 last_abs = (x, y);
-                out.push((translate.0 + x, translate.1 + y));
+                out.push(transform.apply(x, y));
             }
             b'm' | b'l' => {
-                let rest = &tok[1..];
-                let dx: f64 = if rest.is_empty() {
-                    iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0)
-                } else {
-                    rest.parse().unwrap_or(0.0)
-                };
-                let dy: f64 = iter.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+                let dx = read_first!();
+                let dy = read_next!();
                 last_abs = (last_abs.0 + dx, last_abs.1 + dy);
-                out.push((translate.0 + last_abs.0, translate.1 + last_abs.1));
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'H' => {
+                let x = read_first!();
+                last_abs.0 = x;
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'h' => {
+                let dx = read_first!();
+                last_abs.0 += dx;
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'V' => {
+                let y = read_first!();
+                last_abs.1 = y;
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'v' => {
+                let dy = read_first!();
+                last_abs.1 += dy;
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'C' => {
+                // C x1 y1 x2 y2 x y — absolute cubic bezier; sample endpoint only
+                // (control points discarded — see function-level doc for the trade-off)
+                let _x1 = read_first!();
+                let _y1 = read_next!();
+                let _x2 = read_next!();
+                let _y2 = read_next!();
+                let x = read_next!();
+                let y = read_next!();
+                last_abs = (x, y);
+                out.push(transform.apply(x, y));
+            }
+            b'c' => {
+                // c dx1 dy1 dx2 dy2 dx dy — relative cubic bezier; sample endpoint only
+                let _dx1 = read_first!();
+                let _dy1 = read_next!();
+                let _dx2 = read_next!();
+                let _dy2 = read_next!();
+                let dx = read_next!();
+                let dy = read_next!();
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'S' => {
+                // S x2 y2 x y — absolute smooth cubic bezier
+                let _x2 = read_first!();
+                let _y2 = read_next!();
+                let x = read_next!();
+                let y = read_next!();
+                last_abs = (x, y);
+                out.push(transform.apply(x, y));
+            }
+            b's' => {
+                // s dx2 dy2 dx dy — relative smooth cubic bezier
+                let _dx2 = read_first!();
+                let _dy2 = read_next!();
+                let dx = read_next!();
+                let dy = read_next!();
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'Q' => {
+                // Q x1 y1 x y — absolute quadratic bezier
+                let _x1 = read_first!();
+                let _y1 = read_next!();
+                let x = read_next!();
+                let y = read_next!();
+                last_abs = (x, y);
+                out.push(transform.apply(x, y));
+            }
+            b'q' => {
+                // q dx1 dy1 dx dy — relative quadratic bezier
+                let _dx1 = read_first!();
+                let _dy1 = read_next!();
+                let dx = read_next!();
+                let dy = read_next!();
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'T' => {
+                // T x y — absolute smooth quadratic bezier
+                let x = read_first!();
+                let y = read_next!();
+                last_abs = (x, y);
+                out.push(transform.apply(x, y));
+            }
+            b't' => {
+                // t dx dy — relative smooth quadratic bezier
+                let dx = read_first!();
+                let dy = read_next!();
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'A' => {
+                // A rx ry x-rotation large-arc-flag sweep-flag x y
+                let _rx = read_first!();
+                let _ry = read_next!();
+                let _x_rot = read_next!();
+                let _large = read_next!();
+                let _sweep = read_next!();
+                let x = read_next!();
+                let y = read_next!();
+                last_abs = (x, y);
+                out.push(transform.apply(x, y));
+            }
+            b'a' => {
+                // a rx ry x-rotation large-arc-flag sweep-flag dx dy
+                let _rx = read_first!();
+                let _ry = read_next!();
+                let _x_rot = read_next!();
+                let _large = read_next!();
+                let _sweep = read_next!();
+                let dx = read_next!();
+                let dy = read_next!();
+                last_abs = (last_abs.0 + dx, last_abs.1 + dy);
+                out.push(transform.apply(last_abs.0, last_abs.1));
+            }
+            b'Z' | b'z' => {
+                // Close path — no coordinates
             }
             _ => {
-                // Other path commands (curves, arcs) — Verovio's layout
-                // SVG doesn't use these for engraved geometry, so skip.
+                // Unknown or numeric token (e.g. implicit command repeat) — skip.
             }
         }
     }
@@ -1530,4 +1772,156 @@ fn bounds_of(points: &[(f64, f64)]) -> (f64, f64, f64, f64) {
         }
     }
     (min_x, min_y, max_x, max_y)
+}
+
+#[cfg(test)]
+mod bbox_internals {
+    use super::*;
+
+    // ── Affine helpers ────────────────────────────────────────────────────────
+
+    #[test]
+    fn affine_identity_is_passthrough() {
+        let a = Affine::identity();
+        assert_eq!(a.apply(3.0, 4.0), (3.0, 4.0));
+        assert_eq!(a.apply(-10.0, 0.0), (-10.0, 0.0));
+    }
+
+    #[test]
+    fn affine_translate() {
+        let a = parse_transform("translate(10, 20)");
+        assert_eq!(a.apply(5.0, 7.0), (15.0, 27.0));
+        assert_eq!(a.apply(0.0, 0.0), (10.0, 20.0));
+    }
+
+    #[test]
+    fn affine_scale_y_flip() {
+        // scale(1,-1) flips the y axis — the root cause of the bbox bug
+        let a = parse_transform("scale(1, -1)");
+        assert_eq!(a.apply(5.0, 10.0), (5.0, -10.0));
+        assert_eq!(a.apply(0.0, 500.0), (0.0, -500.0));
+    }
+
+    #[test]
+    fn affine_translate_then_scale_svgorder() {
+        // SVG "translate(100,200) scale(1,-1)" applies scale first then translate.
+        // Point (0,500) → scale → (0,-500) → translate → (100,-300).
+        let a = parse_transform("translate(100, 200) scale(1, -1)");
+        assert_eq!(a.apply(0.0, 500.0), (100.0, -300.0));
+    }
+
+    #[test]
+    fn affine_matrix() {
+        // matrix(a,b,c,d,e,f) directly constructs the affine
+        let a = parse_transform("matrix(1, 0, 0, -1, 100, 200)");
+        // x' = x + 100, y' = -y + 200
+        assert_eq!(a.apply(50.0, 30.0), (150.0, 170.0));
+    }
+
+    #[test]
+    fn affine_then_composes_parent_child() {
+        // parent = translate(0, 2000), child = translate(200,-500) scale(1,-1)
+        // (scale applied first inside child, then child's translate, then parent)
+        let parent = parse_transform("translate(0, 2000)");
+        let child = parse_transform("translate(200, -500) scale(1, -1)");
+        let t = parent.then(&child);
+        // point (0,0) in child local space:
+        //   scale(1,-1)       → (0, 0)
+        //   translate(200,-500) → (200, -500)
+        //   translate(0, 2000)  → (200, 1500)
+        assert_eq!(t.apply(0.0, 0.0), (200.0, 1500.0));
+    }
+
+    // ── parse_transform ───────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_transform_single_translate() {
+        let a = parse_transform("translate(42, -7)");
+        assert_eq!(a.apply(0.0, 0.0), (42.0, -7.0));
+    }
+
+    #[test]
+    fn parse_transform_scale_uniform() {
+        // scale(s) → scale(s, s)
+        let a = parse_transform("scale(2)");
+        assert_eq!(a.apply(3.0, 4.0), (6.0, 8.0));
+    }
+
+    #[test]
+    fn parse_transform_ignores_unknown_fn() {
+        // rotate() is not handled; should fall back to identity
+        let a = parse_transform("rotate(45)");
+        assert_eq!(a.apply(1.0, 0.0), (1.0, 0.0));
+    }
+
+    // ── extract_path_points ───────────────────────────────────────────────────
+
+    #[test]
+    fn extract_cubic_bezier_endpoint_with_scale() {
+        // Regression: a cubic bezier under scale(1,-1) must have its endpoint
+        // y-coordinate flipped, not left at the raw positive value.
+        let mut out = Vec::new();
+        let t = parse_transform("scale(1, -1)");
+        extract_path_points("M 0 100 C 10 150 90 150 100 100", t, &mut out);
+        // M(0,100) → (0,-100)  and  C endpoint (100,100) → (100,-100)
+        assert!(
+            out.contains(&(0.0, -100.0)),
+            "M point must be y-flipped; got {out:?}"
+        );
+        assert!(
+            out.contains(&(100.0, -100.0)),
+            "C endpoint must be y-flipped; got {out:?}"
+        );
+        // The raw (un-flipped) values must NOT appear
+        assert!(
+            !out.iter().any(|&(_, y)| y == 100.0),
+            "raw unflipped y=100 must not appear; got {out:?}"
+        );
+    }
+
+    #[test]
+    fn extract_all_curve_commands() {
+        // All curve/arc commands should produce a point for their endpoint.
+        let mut out = Vec::new();
+        let t = Affine::identity();
+        let d = "M 0 0 C 1 2 3 4 5 6 S 7 8 9 10 Q 11 12 13 14 T 15 16 \
+                 A 1 1 0 0 0 17 18 Z";
+        extract_path_points(d, t, &mut out);
+        assert!(out.contains(&(0.0, 0.0)), "M: {out:?}");
+        assert!(out.contains(&(5.0, 6.0)), "C endpoint: {out:?}");
+        assert!(out.contains(&(9.0, 10.0)), "S endpoint: {out:?}");
+        assert!(out.contains(&(13.0, 14.0)), "Q endpoint: {out:?}");
+        assert!(out.contains(&(15.0, 16.0)), "T endpoint: {out:?}");
+        assert!(out.contains(&(17.0, 18.0)), "A endpoint: {out:?}");
+    }
+
+    #[test]
+    fn extract_hv_commands() {
+        let mut out = Vec::new();
+        let t = Affine::identity();
+        extract_path_points("M 10 20 H 50 V 80 h -5 v 10", t, &mut out);
+        assert!(out.contains(&(10.0, 20.0)), "M: {out:?}");
+        assert!(out.contains(&(50.0, 20.0)), "H: {out:?}");
+        assert!(out.contains(&(50.0, 80.0)), "V: {out:?}");
+        assert!(out.contains(&(45.0, 80.0)), "h: {out:?}");
+        assert!(out.contains(&(45.0, 90.0)), "v: {out:?}");
+    }
+
+    #[test]
+    fn scale_y_flip_does_not_produce_raw_zero_or_page_margin() {
+        // Regression for the original bug: a path with scale(1,-1) whose local
+        // y-coordinates are in the range 300..400 must NOT produce samples at
+        // the raw y values (which would land near the page-margin y~500 and
+        // corrupt parent container bboxes).
+        let mut out = Vec::new();
+        let t = parse_transform("translate(500, 2000) scale(1, -1)");
+        // Local y = 350 → scale → -350 → +translate(2000) → 1650
+        extract_path_points("M 100 350 L 200 350", t, &mut out);
+        for &(_x, y) in &out {
+            assert!(
+                y > 1000.0,
+                "y={y} is suspiciously small; scale(1,-1) was likely ignored"
+            );
+        }
+    }
 }
