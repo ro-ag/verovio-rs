@@ -36,6 +36,11 @@ jobs:
   test-macos:
     name: test (macos-latest)
     runs-on: macos-latest
+    # Route cc-rs's C++ compiles through ccache (cc-rs splits CC/CXX on
+    # whitespace, so "ccache cc" runs ccache wrapping the real compiler).
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -79,6 +84,9 @@ jobs:
   test-linux:
     name: test (linux-x86_64)
     runs-on: ubuntu-latest
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -160,6 +168,9 @@ jobs:
   test-linux-arm64:
     name: test (linux-arm64)
     runs-on: ubuntu-24.04-arm
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
