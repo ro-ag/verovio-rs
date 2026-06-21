@@ -8,6 +8,15 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-06-21
+
+### Fixed
+
+- `bbox_map`: apply the full affine transform (scale and matrix, not only
+  translation) and handle curve (`C`) path commands when computing element
+  bounding boxes. Fixes miscalculated top coordinates for transformed or
+  curved glyphs (PR #4).
+
 ## [0.3.4] — 2026-06-01
 
 Documentation and docs.rs improvements.
