@@ -26,6 +26,12 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # Harden cargo's registry downloads against the runner's intermittent HTTP/2
+  # framing errors (seen twice: usvg on arm64, svgtypes on linux-x64). Forcing
+  # HTTP/1.1 + retries makes "failed to get <crate> ... HTTP2 framing layer"
+  # transient failures go away.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
   # Caching: Swatinem/rust-cache handles the cargo registry + Rust
   # dependency fingerprints. sccache is intentionally NOT enabled — the
   # GitHub Actions cache backend returns transient HTTP 400s that hard-fail
@@ -44,7 +50,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -54,7 +60,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: macos-latest
 
@@ -63,7 +69,7 @@ jobs:
       # the cached .o instead, keyed on compiler+flags+source (auto-invalidates
       # on a new compiler or new Verovio submodule). verbose:2 prints hit stats.
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: macos-latest
           max-size: 600M
@@ -90,7 +96,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -98,12 +104,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: linux-x86_64
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: linux-x86_64
           max-size: 600M
@@ -121,19 +127,28 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v31
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: sanitize
+
+      # Persist ccache's dir across runs; the nix-shell below uses pkgs.ccache
+      # against this same CCACHE_DIR, so the ~300 instrumented C++ objects are
+      # cached run-to-run (separate key from the non-sanitized builds).
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        with:
+          key: sanitize
+          max-size: 600M
 
       # Sanitizer runs under Nix — plain-ubuntu apt-clang cannot link it: stable
       # rustc defaults to rust-lld (drops the -fsanitize runtime), and even
@@ -155,14 +170,20 @@ jobs:
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: |
-          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" --run '
-            unset RUSTC_WRAPPER CC CXX
+          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld pkgs.ccache ]; })" --run '
+            unset RUSTC_WRAPPER
+            # Route cc-rs C++ compiles through ccache (the linker stays plain clang
+            # via RUSTFLAGS, so only compilation is cached). These exports override
+            # any CC/CXX shell.nix sets. CCACHE_DIR comes from the ccache step above.
+            export CC="ccache clang" CXX="ccache clang++"
             export RUSTFLAGS="${RUSTFLAGS//-fuse-ld=mold/-fuse-ld=lld} -C linker=clang"
             echo "RUSTFLAGS=$RUSTFLAGS"
 
             cargo test --workspace --features verovio/sanitize --no-run --verbose
 
             cargo test --workspace --features verovio/sanitize --verbose
+
+            ccache -s
           '
 
   test-linux-arm64:
@@ -174,7 +195,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -182,12 +203,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: linux-arm64
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: linux-arm64
           max-size: 600M
@@ -205,7 +226,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -213,7 +234,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: windows-latest
 
@@ -232,7 +253,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -240,12 +261,12 @@ jobs:
         uses: dtolnay/rust-toolchain@1.85.0
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: msrv
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: msrv
           max-size: 600M
@@ -264,7 +285,7 @@ jobs:
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           submodules: recursive
 
@@ -272,12 +293,12 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: docs
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: docs
           max-size: 600M
