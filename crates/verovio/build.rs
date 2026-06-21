@@ -21,6 +21,18 @@ fn main() {
         _ => {}
     }
 
+    // verovio-sys's native libs are consumed from this crate's tests/examples,
+    // so re-emit the C++ runtime link directive here too.
+    if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else if cfg!(target_os = "windows") {
+        if cfg!(target_env = "gnu") {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
+    } else {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
+
     if !cfg!(target_os = "linux") {
         return;
     }
