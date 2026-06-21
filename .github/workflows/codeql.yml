@@ -1,0 +1,72 @@
+name: CodeQL
+
+# Replaces GitHub's default-setup code scanning. Default setup re-scans on
+# every push to main, piling a third workflow onto each release. This runs
+# only where it adds signal: on PRs (catch issues before merge) and on a
+# weekly schedule (catch newly-published advisories). No per-push trigger.
+#
+# NOTE: GitHub's *default* CodeQL setup must be turned OFF for this file to
+# take effect without double-scanning (Settings → Code security → CodeQL →
+# switch from Default to Advanced, or it was disabled via the API).
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore']
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write # upload CodeQL results
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Verovio's C++ is compiled by cargo via the `cc` crate (no
+          # make/cmake), so c-cpp autobuild can't find it — drive the build
+          # ourselves with `cargo build` under manual mode so the compiler
+          # invocations are traced.
+          - language: c-cpp
+            build-mode: manual
+          - language: rust
+            build-mode: autobuild
+          - language: actions
+            build-mode: none
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        if: matrix.language != 'actions'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build (trace C++ + bridge for CodeQL)
+        if: matrix.build-mode == 'manual'
+        run: cargo build --workspace --verbose
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

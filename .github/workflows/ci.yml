@@ -3,12 +3,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore']
   pull_request:
     branches: [main]
+    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  # Collapse superseded runs: a new push to the same PR cancels the old run.
+  # Never cancel on main (or tags) so every commit on main gets a full run.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Supported targets: macOS (arm64), Linux x86_64, Linux arm64,
 # Windows (MSVC). ASan/UBSan run in a separate Linux job. Local NixOS

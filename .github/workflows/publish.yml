@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Serialize releases; never cancel a publish mid-flight — a half-published
+  # release (e.g. verovio-sys up but verovio not) leaves crates.io inconsistent.
+  group: publish
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -43,8 +49,10 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
-        run: cargo test --workspace --verbose
+      # No test step here: CI already ran the full suite on this commit (tags
+      # are cut from tested main), and each `cargo publish` below re-builds the
+      # crate to verify before upload. Re-running the suite would just rebuild
+      # Verovio's C++ a third time for the same SHA.
 
       # Publish order matters: verovio depends on verovio-sys + verovio-data.
       # Each `cargo publish` blocks until the crate is indexed, so the next
