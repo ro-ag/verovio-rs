@@ -7,19 +7,21 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Supported targets: macOS (arm64), Linux x86_64 (NixOS dev env),
-# Linux arm64, Windows (MSVC). The NixOS job replicates the exact
-# toolchain we develop against; sanitizers run in a separate NixOS job.
+permissions:
+  contents: read
+
+# Supported targets: macOS (arm64), Linux x86_64, Linux arm64,
+# Windows (MSVC). ASan/UBSan run in a separate Linux job. Local NixOS
+# dev uses shell.nix (kept in-repo, not exercised in CI).
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # sccache is intentionally NOT enabled at the workflow level. The GitHub
-  # Actions cache backend that sccache talks to returns transient HTTP 400
-  # errors that hard-fail sccache at startup. Swatinem/rust-cache below
-  # handles cargo registry + fingerprint caching; mold (Linux) handles
-  # link-time speedup. Local dev keeps sccache via shell.nix where the
-  # local filesystem cache backend has no such reliability issue.
+  # Caching: Swatinem/rust-cache handles the cargo registry + Rust
+  # dependency fingerprints. sccache is intentionally NOT enabled — the
+  # GitHub Actions cache backend returns transient HTTP 400s that hard-fail
+  # it at startup. Verovio's C++ is recompiled per run; if that ever becomes
+  # the bottleneck, add ccache persisted via actions/cache.
 
 jobs:
   test-macos:
@@ -54,8 +56,8 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --verbose
 
-  test-nix:
-    name: test (nix-shell — NixOS dev env)
+  test-linux:
+    name: test (linux-x86_64)
     runs-on: ubuntu-latest
 
     steps:
@@ -64,39 +66,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: nix-shell
-
-      # mold comes from shell.nix and stays on. sccache (also in shell.nix)
-      # is disabled per-step in CI: each `nix-shell --run` allocates an
-      # ephemeral child TMPDIR that is deleted on shell exit, but the
-      # sccache daemon outlives the shell and pins that path as its scratch
-      # — so the next step's rustc shims fail with "Failed to create temp
-      # dir". Local dev runs everything inside a single long-lived shell
-      # and is unaffected. Unsetting RUSTC_WRAPPER/CC/CXX inside --run
-      # neutralises sccache without touching shell.nix.
-      - name: cargo fmt --check
-        run: nix-shell --run "unset RUSTC_WRAPPER CC CXX; cargo fmt --all --check"
-
-      - name: cargo clippy
-        run: nix-shell --run "unset RUSTC_WRAPPER CC CXX; cargo clippy --workspace --all-targets"
+          shared-key: linux-x86_64
 
       - name: cargo build
-        run: nix-shell --run "unset RUSTC_WRAPPER CC CXX; cargo build --workspace --all-targets --verbose"
+        run: cargo build --workspace --all-targets --verbose
 
       - name: cargo test
-        run: nix-shell --run "unset RUSTC_WRAPPER CC CXX; cargo test --workspace --verbose"
+        run: cargo test --workspace --verbose
 
   sanitize:
-    name: sanitize (ASan + UBSan, nix-shell)
-    needs: test-nix
+    name: sanitize (ASan + UBSan, linux-x86_64)
     runs-on: ubuntu-latest
 
     steps:
@@ -105,42 +90,22 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: sanitize
 
-      # Force clang as the linker driver: stable Rust defaults to rust-lld
-      # which doesn't translate `-fsanitize=address` into the ASan-runtime
-      # link (rustc-link-arg passes the flag through verbatim). clang's cc
-      # driver does, and it knows where its own libclang_rt.* lives.
-      # Skip mold here — mold and the cc-driver-managed sanitizer runtime
-      # don't combine cleanly; default ld is fast enough for one job.
-      #
-      # shell.nix doesn't include compiler-rt (UBSan runtime ships as a
-      # separate nixpkgs derivation, not bundled with clang) or lld (also
-      # a separate derivation in nixpkgs — clang can't find it via PATH
-      # alone, fails with "invalid linker name in argument '-fuse-ld=lld'").
-      # Extend the dev shell on the fly with `-E` so this stays a CI-only
-      # concern — local sanitizer builds are not in shell.nix's contract.
-      # RUSTFLAGS is set inside --run because shell.nix exports its own
-      # RUSTFLAGS and that overrides any workflow-level `env:` entry.
-      # Crucial: preserve shell.nix's RUSTFLAGS instead of overwriting it.
-      # shell.nix sets `-Wl,-rpath,${stdenv.cc.libc.out}/lib`, which is what
-      # keeps the produced binaries pointing at Nix's glibc at runtime. A
-      # bare `export RUSTFLAGS='-C linker=clang -C link-arg=-fuse-ld=lld'`
-      # silently discards that rpath, the binary then resolves libc.so.6
-      # against the runner's host `/lib/x86_64-linux-gnu/`, and the symbol
-      # lookup explodes (`__nptl_change_stack_perm, version GLIBC_PRIVATE`)
-      # before any test runs. Transform RUSTFLAGS in place instead: swap
-      # mold→lld (mold + cc-driver-managed sanitizer runtime don't combine
-      # cleanly) and append `-C linker=clang`. The Nix glibc rpath survives
-      # and the libstdc++ rpath from verovio's build.rs handles libstdc++.
+      # verovio-sys/build.rs compiles Verovio + the cxx bridge with
+      # `-fsanitize=address,undefined` and emits the same flags as link args.
+      # For those link args to pull in the sanitizer runtime, the Rust linker
+      # must be a compiler *driver* (gcc), not a bare linker like rust-lld
+      # which passes `-fsanitize=*` through verbatim and never links libasan.
+      # Force the gcc driver with `-C linker=cc`; GCC's libasan/libubsan ship
+      # with the toolchain already on the runner, so no extra packages are
+      # needed (this is why the all-GCC path is simpler than clang+compiler-rt).
       - name: cargo test (sanitize)
         env:
           # Make ASan failures fatal but readable; halt-on-error keeps the
@@ -150,16 +115,10 @@ jobs:
           # LSan report at process exit.
           ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+          RUSTFLAGS: "-C linker=cc"
         run: |
-          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" --run '
-            unset RUSTC_WRAPPER CC CXX
-            export RUSTFLAGS="${RUSTFLAGS//-fuse-ld=mold/-fuse-ld=lld} -C linker=clang"
-            echo "RUSTFLAGS=$RUSTFLAGS"
-
-            cargo test --workspace --features verovio/sanitize --no-run --verbose
-
-            cargo test --workspace --features verovio/sanitize --verbose
-          '
+          cargo test --workspace --features verovio/sanitize --no-run --verbose
+          cargo test --workspace --features verovio/sanitize --verbose
 
   test-linux-arm64:
     name: test (linux-arm64)
