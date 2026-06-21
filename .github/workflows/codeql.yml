@@ -41,8 +41,10 @@ jobs:
           # invocations are traced.
           - language: c-cpp
             build-mode: manual
+          # Rust uses build-mode `none` (source-based extraction, what CodeQL
+          # default setup uses) — autobuild fails on this cargo+cc workspace.
           - language: rust
-            build-mode: autobuild
+            build-mode: none
           - language: actions
             build-mode: none
 
