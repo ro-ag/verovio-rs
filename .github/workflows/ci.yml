@@ -36,6 +36,11 @@ jobs:
   test-macos:
     name: test (macos-latest)
     runs-on: macos-latest
+    # Route cc-rs's C++ compiles through ccache (cc-rs splits CC/CXX on
+    # whitespace, so "ccache cc" runs ccache wrapping the real compiler).
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -53,6 +58,17 @@ jobs:
         with:
           shared-key: macos-latest
 
+      # Cache Verovio's C++ objects. Swatinem/rust-cache prunes workspace-member
+      # build output, so the big C++ compile reruns every job — ccache returns
+      # the cached .o instead, keyed on compiler+flags+source (auto-invalidates
+      # on a new compiler or new Verovio submodule). verbose:2 prints hit stats.
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-latest
+          max-size: 600M
+          verbose: 2
+
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
@@ -68,6 +84,9 @@ jobs:
   test-linux:
     name: test (linux-x86_64)
     runs-on: ubuntu-latest
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -82,6 +101,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: linux-x86_64
+
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-x86_64
+          max-size: 600M
+          verbose: 2
 
       - name: cargo build
         run: cargo build --workspace --all-targets --verbose
@@ -142,6 +168,9 @@ jobs:
   test-linux-arm64:
     name: test (linux-arm64)
     runs-on: ubuntu-24.04-arm
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -156,6 +185,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: linux-arm64
+
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-arm64
+          max-size: 600M
+          verbose: 2
 
       - name: cargo build
         run: cargo build --workspace --all-targets --verbose
@@ -186,3 +222,22 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --verbose
+
+  # Single required status check for branch protection: aggregates every job so
+  # the protected-branch rule needs one stable context (rename-proof) instead of
+  # five matrix names. Fails if any needed job failed or was cancelled; passes if
+  # all succeeded or were skipped (docs-only paths-ignore run).
+  ci-success:
+    name: CI Success
+    if: always()
+    needs: [test-macos, test-linux, sanitize, test-linux-arm64, test-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all jobs passed
+        run: |
+          results='${{ join(needs.*.result, ',') }}'
+          echo "job results: $results"
+          case "$results" in
+            *failure*|*cancelled*) echo "::error::a required CI job did not pass"; exit 1 ;;
+            *) echo "all required jobs passed" ;;
+          esac
