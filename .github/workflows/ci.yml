@@ -1,4 +1,5 @@
 name: CI
+run-name: CI · ${{ github.event_name }} · ${{ github.head_ref || github.ref_name }}
 
 on:
   push:
@@ -129,7 +130,11 @@ jobs:
           UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
           CC: clang
           CXX: clang++
-          RUSTFLAGS: "-C linker=clang -C link-arg=-fuse-ld=lld"
+          # Link with clang++ (not clang): the C++ vptr/RTTI UBSan checks
+          # (__ubsan_vptr_type_cache, __ubsan_handle_dynamic_type_cache_miss)
+          # live in libclang_rt.ubsan_standalone_cxx, which only the C++ driver
+          # adds. The C driver links asan + base ubsan but misses the cxx one.
+          RUSTFLAGS: "-C linker=clang++ -C link-arg=-fuse-ld=lld"
         run: |
           cargo test --workspace --features verovio/sanitize --no-run --verbose
           cargo test --workspace --features verovio/sanitize --verbose
