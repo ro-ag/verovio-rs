@@ -1,4 +1,5 @@
 name: Publish to crates.io
+run-name: Publish ${{ github.ref_name }}
 
 on:
   push:

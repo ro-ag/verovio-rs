@@ -1,11 +1,6 @@
 name: CI
+run-name: CI · ${{ github.event_name }} · ${{ github.head_ref || github.ref_name }}
 
-# TEMPORARY no-op stub. The real build/test matrix (macOS, Linux x86_64,
-# Linux arm64, Windows, ASan/UBSan sanitize) lives in git history at commit
-# 4164bfd — restore with:
-#   git checkout 4164bfd -- .github/workflows/ci.yml
-# Purpose: validate workflow triggers + concurrency + PR-vs-push dedup
-# cheaply, without the ~15min Verovio C++ build.
 on:
   push:
     branches: [main]
@@ -19,17 +14,175 @@ permissions:
   contents: read
 
 concurrency:
+  # Collapse superseded runs: a new push to the same PR cancels the old run.
+  # Never cancel on main (or tags) so every commit on main gets a full run.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Supported targets: macOS (arm64), Linux x86_64, Linux arm64,
+# Windows (MSVC). ASan/UBSan run in a separate Linux job. Local NixOS
+# dev uses shell.nix (kept in-repo, not exercised in CI).
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Caching: Swatinem/rust-cache handles the cargo registry + Rust
+  # dependency fingerprints. sccache is intentionally NOT enabled — the
+  # GitHub Actions cache backend returns transient HTTP 400s that hard-fail
+  # it at startup. Verovio's C++ is recompiled per run; if that ever becomes
+  # the bottleneck, add ccache persisted via actions/cache.
+
 jobs:
-  noop:
-    name: noop (stub)
-    runs-on: ubuntu-latest
+  test-macos:
+    name: test (macos-latest)
+    runs-on: macos-latest
+
     steps:
-      - name: Echo trigger context
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-latest
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
+
+  test-linux:
+    name: test (linux-x86_64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-x86_64
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
+
+  sanitize:
+    name: sanitize (ASan + UBSan, nix-shell)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sanitize
+
+      # Sanitizer runs under Nix — plain-ubuntu apt-clang cannot link it: stable
+      # rustc defaults to rust-lld (drops the -fsanitize runtime), and even
+      # clang++ + LLVM lld leaves libclang_rt.asan_cxx's RTTI refs (typeinfo,
+      # __dynamic_cast) unresolved against libstdc++ (--as-needed/link ordering).
+      # Nix's llvmPackages compiler-rt + lld + clang wrapper resolve all of it.
+      # shell.nix gives clang+mold+the Nix-glibc rpath; extend it on the fly with
+      # -E to add compiler-rt (ASan/UBSan cxx runtime) and lld (separate drv).
+      # Transform RUSTFLAGS in place to PRESERVE shell.nix's Nix-glibc rpath — a
+      # bare overwrite makes binaries resolve libc against the host and crash
+      # (GLIBC_PRIVATE) before any test runs; swap mold->lld, append -C linker=clang.
+      - name: cargo test (sanitize)
+        env:
+          # Make ASan failures fatal but readable; halt-on-error keeps the
+          # first finding visible without a flood of follow-on noise.
+          # detect_leaks=0 because the verovio-data tempdir is deliberately
+          # leaked (process-lifetime) and would otherwise be a false-positive
+          # LSan report at process exit.
+          ASAN_OPTIONS: "halt_on_error=1:abort_on_error=1:print_stats=1:detect_leaks=0"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
         run: |
-          echo "event = ${{ github.event_name }}"
-          echo "ref   = ${{ github.ref }}"
-          echo "sha   = ${{ github.sha }}"
-          echo "stub CI — no build/test"
+          nix-shell -E "let pkgs = import <nixpkgs> {}; in (import ./shell.nix { inherit pkgs; }).overrideAttrs (old: { buildInputs = (old.buildInputs or []) ++ [ pkgs.llvmPackages_21.compiler-rt pkgs.llvmPackages_21.lld ]; })" --run '
+            unset RUSTC_WRAPPER CC CXX
+            export RUSTFLAGS="${RUSTFLAGS//-fuse-ld=mold/-fuse-ld=lld} -C linker=clang"
+            echo "RUSTFLAGS=$RUSTFLAGS"
+
+            cargo test --workspace --features verovio/sanitize --no-run --verbose
+
+            cargo test --workspace --features verovio/sanitize --verbose
+          '
+
+  test-linux-arm64:
+    name: test (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-arm64
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
+
+  test-windows:
+    name: test (windows-latest)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (with Verovio submodule)
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-latest
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: cargo test
+        run: cargo test --workspace --verbose
