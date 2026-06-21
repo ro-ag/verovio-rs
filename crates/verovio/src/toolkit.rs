@@ -1410,11 +1410,16 @@ fn parse_transform(s: &str) -> Affine {
 /// Honours all standard path commands: `M`/`L`/`H`/`V` (move/line),
 /// `C`/`S`/`Q`/`T` (bezier curves), `A` (arc), and `Z` (close), in both
 /// absolute and relative variants.  For curves only the **endpoint** is
-/// sampled; control points are consumed and discarded.  This is sufficient
-/// to produce a correct bounding box for Verovio's ties, slurs, and braces
-/// whose paths use cubic bezier curves (`C`/`c`).
+/// sampled; control points are consumed and discarded.  This gives a correct
+/// bbox for Verovio's ties, slurs, and braces, whose bezier arcs are shallow
+/// and rarely extend beyond their endpoints.
+///
+/// **Trade-off:** deeply curved paths (large off-axis control points) may
+/// produce a bbox that is slightly tight on the convex side.  Sampling only
+/// endpoints keeps the hot path simple and is accurate for all the geometry
+/// Verovio actually emits.
 fn extract_path_points(d: &str, transform: Affine, out: &mut Vec<(f64, f64)>) {
-    let mut last_abs = (0.0_f64, 0.0_f64);
+    let mut last_abs = (0.0, 0.0);
     let mut iter = d.split_whitespace().peekable();
     while let Some(tok) = iter.next() {
         let bytes = tok.as_bytes();
@@ -1477,7 +1482,8 @@ fn extract_path_points(d: &str, transform: Affine, out: &mut Vec<(f64, f64)>) {
                 out.push(transform.apply(last_abs.0, last_abs.1));
             }
             b'C' => {
-                // C x1 y1 x2 y2 x y — absolute cubic bezier; sample endpoint
+                // C x1 y1 x2 y2 x y — absolute cubic bezier; sample endpoint only
+                // (control points discarded — see function-level doc for the trade-off)
                 let _x1 = read_first!();
                 let _y1 = read_next!();
                 let _x2 = read_next!();
@@ -1488,7 +1494,7 @@ fn extract_path_points(d: &str, transform: Affine, out: &mut Vec<(f64, f64)>) {
                 out.push(transform.apply(x, y));
             }
             b'c' => {
-                // c dx1 dy1 dx2 dy2 dx dy — relative cubic bezier
+                // c dx1 dy1 dx2 dy2 dx dy — relative cubic bezier; sample endpoint only
                 let _dx1 = read_first!();
                 let _dy1 = read_next!();
                 let _dx2 = read_next!();
