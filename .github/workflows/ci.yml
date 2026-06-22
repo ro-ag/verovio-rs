@@ -223,6 +223,13 @@ jobs:
   test-windows:
     name: test (windows-latest)
     runs-on: windows-latest
+    # sccache caches the MSVC C++ (Verovio) + rustc. cc-rs splits CC/CXX on
+    # whitespace, so "sccache cl.exe" wraps MSVC's compiler; RUSTC_WRAPPER wraps
+    # rustc. sccache (not ccache) has first-class MSVC/cl.exe support.
+    env:
+      RUSTC_WRAPPER: sccache
+      CC: "sccache cl.exe"
+      CXX: "sccache cl.exe"
 
     steps:
       - name: Checkout (with Verovio submodule)
@@ -238,11 +245,28 @@ jobs:
         with:
           shared-key: windows-latest
 
+      - name: sccache (caches MSVC C++ + rustc)
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        with:
+          variant: sccache
+          key: windows-latest
+          max-size: 600M
+
+      # Put cl.exe (+ INCLUDE/LIB) on PATH. cc-rs normally activates this itself,
+      # but overriding CC/CXX to "sccache cl.exe" bypasses that, so cl.exe must
+      # already be findable for both cc-rs's family detection and sccache.
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
       - name: cargo build
         run: cargo build --workspace --all-targets --verbose
 
       - name: cargo test
         run: cargo test --workspace --verbose
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   msrv:
     name: msrv (1.85)
