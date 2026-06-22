@@ -17,6 +17,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # dtolnay/rust-toolchain's @ref is the Rust toolchain (e.g. @1.85.0,
+      # @stable, @nightly), NOT an action version. Dependabot otherwise
+      # "bumps" @1.85.0 -> @1.100.0 and breaks the MSRV job.
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       actions:
         patterns: ["*"]
