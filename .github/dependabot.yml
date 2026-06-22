@@ -1,17 +1,17 @@
 version: 2
 updates:
-  # Rust dependencies (workspace root).
+  # All Rust dependency updates collapse into ONE grouped PR (any update type),
+  # so a refresh can't open a PR per crate.
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # Collapse routine patch/minor bumps into one PR to cut noise.
-      cargo-minor:
-        update-types: ["minor", "patch"]
+      cargo:
+        patterns: ["*"]
 
-  # GitHub Actions used by the workflows.
+  # All GitHub Actions updates collapse into ONE grouped PR.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -19,4 +19,4 @@ updates:
     open-pull-requests-limit: 5
     groups:
       actions:
-        update-types: ["minor", "patch"]
+        patterns: ["*"]

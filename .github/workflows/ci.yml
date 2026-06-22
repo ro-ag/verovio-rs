@@ -4,10 +4,10 @@ run-name: CI · ${{ github.event_name }} · ${{ github.head_ref || github.ref_na
 on:
   push:
     branches: [main]
-    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore']
+    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore', '.github/dependabot.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore']
+    paths-ignore: ['**/*.md', 'LICENSE', 'NOTICE', '.gitignore', '.github/dependabot.yml']
   workflow_dispatch:
 
 permissions:
