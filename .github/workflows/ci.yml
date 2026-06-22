@@ -252,6 +252,12 @@ jobs:
           key: windows-latest
           max-size: 600M
 
+      # Put cl.exe (+ INCLUDE/LIB) on PATH. cc-rs normally activates this itself,
+      # but overriding CC/CXX to "sccache cl.exe" bypasses that, so cl.exe must
+      # already be findable for both cc-rs's family detection and sccache.
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
       - name: cargo build
         run: cargo build --workspace --all-targets --verbose
 
