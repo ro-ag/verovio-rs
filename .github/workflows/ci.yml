@@ -69,7 +69,7 @@ jobs:
       # the cached .o instead, keyed on compiler+flags+source (auto-invalidates
       # on a new compiler or new Verovio submodule). verbose:2 prints hit stats.
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: macos-latest
           max-size: 600M
@@ -109,7 +109,7 @@ jobs:
           shared-key: linux-x86_64
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: linux-x86_64
           max-size: 600M
@@ -145,7 +145,7 @@ jobs:
       # against this same CCACHE_DIR, so the ~300 instrumented C++ objects are
       # cached run-to-run (separate key from the non-sanitized builds).
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: sanitize
           max-size: 600M
@@ -208,7 +208,7 @@ jobs:
           shared-key: linux-arm64
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: linux-arm64
           max-size: 600M
@@ -258,7 +258,7 @@ jobs:
           submodules: recursive
 
       - name: Install Rust 1.85 (declared MSRV)
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.100.0
 
       - name: Cache cargo / target
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
@@ -266,7 +266,7 @@ jobs:
           shared-key: msrv
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: msrv
           max-size: 600M
@@ -298,7 +298,7 @@ jobs:
           shared-key: docs
 
       - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           key: docs
           max-size: 600M
