@@ -36,8 +36,8 @@ audio = ["dep:rustysynth"]
 live-audio = ["audio", "dep:cpal"]
 
 [dependencies]
-verovio-sys = { path = "../verovio-sys", version = "0.3.5" }
-verovio-data = { path = "../verovio-data", version = "0.3.5" }
+verovio-sys = { path = "../verovio-sys", version = "0.3.6" }
+verovio-data = { path = "../verovio-data", version = "0.3.6" }
 cxx.workspace = true
 tempfile.workspace = true
 serde.workspace = true

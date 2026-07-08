@@ -5,7 +5,11 @@
 version = 2
 # Fail on any RustSec advisory by default. Add IDs here (with a note) only to
 # temporarily accept an advisory that has no fix yet.
-ignore = []
+ignore = [
+  # `ttf-parser` is pulled in through `fontdb`/`usvg`/`svg2pdf`; RustSec
+  # reports no safe upgrade for RUSTSEC-2026-0192 yet.
+  "RUSTSEC-2026-0192",
+]
 
 [licenses]
 version = 2

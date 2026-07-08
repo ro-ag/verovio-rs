@@ -8,6 +8,23 @@ Until 1.0, every minor bump (0.x → 0.y) may carry breaking API changes.
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-07-08
+
+### Fixed
+
+- `render_to_pdf` and `render_to_pdf_all_pages`: load a populated
+  `svg2pdf::usvg` font database so SVG `<text>` elements such as titles,
+  tempo marks, lyrics, dynamics, and directions are preserved in PDF
+  output. Fixes #19.
+- `pdf` feature builds: align the direct `pdf-writer` dependency with
+  `svg2pdf 0.13` so multi-page PDF assembly uses the same PDF object
+  types returned by `svg2pdf::to_chunk`.
+
+### Changed
+
+- Publish workflow: after a successful tag-driven crates.io publish,
+  create the matching GitHub Release from the changelog entry.
+
 ## [0.3.5] — 2026-06-21
 
 ### Fixed
