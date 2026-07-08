@@ -99,6 +99,33 @@ fn render_to_pdf_produces_pdf_magic() {
 
 #[cfg(feature = "pdf")]
 #[test]
+fn svg_text_is_preserved_in_pdf_outputs() {
+    let svg = r#"
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40" viewBox="0 0 120 40">
+  <text x="10" y="25" font-family="serif" font-size="18">Title</text>
+</svg>
+"#;
+
+    let single_page = verovio::raster::svg_to_pdf(svg).expect("svg_to_pdf");
+    assert!(
+        single_page
+            .windows(b"/Font".len())
+            .any(|window| window == b"/Font"),
+        "single-page PDF should contain a font resource for SVG text"
+    );
+
+    let multi_page =
+        verovio::raster::svgs_to_pdf(&[svg.to_string()]).expect("svgs_to_pdf with text");
+    assert!(
+        multi_page
+            .windows(b"/Font".len())
+            .any(|window| window == b"/Font"),
+        "multi-page PDF should contain a font resource for SVG text"
+    );
+}
+
+#[cfg(feature = "pdf")]
+#[test]
 fn render_to_pdf_out_of_range_page_propagates_error() {
     let mut tk = Toolkit::from_data(SAMPLE_PAE).expect("PAE load");
     let res = tk.render_to_pdf(999);

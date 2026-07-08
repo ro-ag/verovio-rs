@@ -33,6 +33,25 @@ fn shared_fontdb() -> std::sync::Arc<resvg::usvg::fontdb::Database> {
     .clone()
 }
 
+#[cfg(feature = "pdf")]
+fn shared_pdf_fontdb() -> std::sync::Arc<svg2pdf::usvg::fontdb::Database> {
+    use std::sync::{Arc, OnceLock};
+    static DB: OnceLock<Arc<svg2pdf::usvg::fontdb::Database>> = OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = svg2pdf::usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        Arc::new(db)
+    })
+    .clone()
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_usvg_options() -> svg2pdf::usvg::Options<'static> {
+    let mut options = svg2pdf::usvg::Options::default();
+    options.fontdb = shared_pdf_fontdb();
+    options
+}
+
 /// Rasterize an SVG string to PNG bytes via `resvg`.
 ///
 /// `scale` is a multiplier on the SVG's intrinsic size — `1.0` renders at
@@ -73,8 +92,9 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>> {
 pub fn svg_to_pdf(svg: &str) -> crate::Result<Vec<u8>> {
     let options = svg2pdf::ConversionOptions::default();
     let page_options = svg2pdf::PageOptions::default();
+    let usvg_options = pdf_usvg_options();
     let bytes = svg2pdf::to_pdf(
-        &svg2pdf::usvg::Tree::from_str(svg, &svg2pdf::usvg::Options::default())
+        &svg2pdf::usvg::Tree::from_str(svg, &usvg_options)
             .map_err(|e| crate::Error::Xml(format!("usvg parse: {e}")))?,
         options,
         page_options,
@@ -98,7 +118,7 @@ pub fn svgs_to_pdf(svgs: &[String]) -> crate::Result<Vec<u8>> {
     use std::collections::HashMap;
 
     use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect, Ref};
-    use svg2pdf::usvg::{Options, Tree};
+    use svg2pdf::usvg::Tree;
 
     if svgs.is_empty() {
         return Err(crate::Error::RenderFailed { page: 0 });
@@ -135,8 +155,9 @@ pub fn svgs_to_pdf(svgs: &[String]) -> crate::Result<Vec<u8>> {
 
     // Second pass: for each SVG, get its embed chunk + xobject ref,
     // renumber into the document, write the page.
+    let usvg_options = pdf_usvg_options();
     for (i, svg) in svgs.iter().enumerate() {
-        let tree = Tree::from_str(svg, &Options::default())
+        let tree = Tree::from_str(svg, &usvg_options)
             .map_err(|e| crate::Error::Xml(format!("usvg parse page {}: {e}", i + 1)))?;
         let (chunk, svg_id) = svg2pdf::to_chunk(&tree, svg2pdf::ConversionOptions::default())
             .map_err(|e| crate::Error::Xml(format!("svg2pdf chunk page {}: {e}", i + 1)))?;
