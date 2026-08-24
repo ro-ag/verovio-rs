@@ -26,19 +26,39 @@ jobs:
     # Only run on tags pushed to the main branch lineage
     if: github.repository == 'ro-ag/verovio-rs'
 
+    # Route cc-rs's C++ compiles through ccache (cc-rs splits CC/CXX on
+    # whitespace, so "ccache cc" wraps the real compiler). The three
+    # `cargo publish` calls below each rebuild the verovio-sys C++ stack
+    # from scratch — with ccache the second and third builds are cache hits.
+    env:
+      CC: "ccache cc"
+      CXX: "ccache c++"
+
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-05
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: publish
+
+      # Cache Verovio's C++ objects across the three publishes below (each
+      # `cargo publish` repackages and rebuilds) and across runs, keyed the
+      # same as rust-cache's shared-key.
+      - name: ccache (Verovio C++ objects)
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: publish
+          max-size: 600M
+          verbose: 2
 
       - name: Verify version matches tag
         run: |
@@ -56,19 +76,35 @@ jobs:
       # Verovio's C++ a third time for the same SHA.
 
       # Publish order matters: verovio depends on verovio-sys + verovio-data.
-      # Each `cargo publish` blocks until the crate is indexed, so the next
-      # crate can resolve its dependency.
+      # verovio-data has no dependency on verovio-sys, so the two publish
+      # back-to-back; only verovio needs the index to have caught up.
       - name: Publish verovio-sys
         run: cargo publish -p verovio-sys
-
-      - name: Wait for crates.io index
-        run: sleep 30
 
       - name: Publish verovio-data
         run: cargo publish -p verovio-data
 
+      # Poll the crates.io sparse index instead of a fixed sleep: return as
+      # soon as both crates are indexed (typically seconds), fail loudly if
+      # indexing stalls for more than 5 minutes.
       - name: Wait for crates.io index
-        run: sleep 30
+        run: |
+          for crate in verovio-sys verovio-data; do
+            version=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg c "$crate" '.packages[] | select(.name==$c) | .version')
+            for i in $(seq 1 60); do
+              if curl -sf "https://index.crates.io/${crate:0:2}/${crate:2:2}/$crate" \
+                | grep -q "\"vers\":\"$version\""; then
+                echo "$crate $version indexed"
+                break
+              fi
+              if [ "$i" -eq 60 ]; then
+                echo "::error::$crate $version not indexed after 5 minutes"
+                exit 1
+              fi
+              sleep 5
+            done
+          done
 
       - name: Publish verovio
         run: cargo publish -p verovio

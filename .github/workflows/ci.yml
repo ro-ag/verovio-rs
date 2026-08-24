@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Supported targets: macOS (arm64), Linux x86_64, Linux arm64,
-# Windows (MSVC). ASan/UBSan run in a separate Linux job. Local NixOS
+# Windows (MSVC). ASan/UBSan run in a separate Linux leg. Local NixOS
 # dev uses shell.nix (kept in-repo, not exercised in CI).
 
 env:
@@ -32,123 +32,142 @@ env:
   # transient failures go away.
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
-  # Caching: Swatinem/rust-cache handles the cargo registry + Rust
-  # dependency fingerprints. sccache is intentionally NOT enabled — the
-  # GitHub Actions cache backend returns transient HTTP 400s that hard-fail
-  # it at startup. Verovio's C++ is recompiled per run; if that ever becomes
-  # the bottleneck, add ccache persisted via actions/cache.
+  # Caching: Swatinem/rust-cache handles the cargo registry + Rust dependency
+  # fingerprints; hendrikmuhs/ccache-action caches Verovio's C++ objects
+  # (sccache variant on Windows for MSVC/cl.exe support) per OS key.
 
 jobs:
-  test-macos:
-    name: test (macos-latest)
-    runs-on: macos-latest
-    # Route cc-rs's C++ compiles through ccache (cc-rs splits CC/CXX on
-    # whitespace, so "ccache cc" runs ccache wrapping the real compiler).
+  # One matrix leg per target/toolchain combination. Legs differ only in
+  # runner, toolchain, and cache keys; the step bodies below are shared:
+  #   lint legs     — also run fmt + clippy (macOS only, to lint once)
+  #   sanitize leg  — replaces build/test with the Nix ASan/UBSan run
+  #   docs leg      — replaces build/test with the docs.rs-mirroring cargo doc
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    # Route cc-rs's C++ compiles through the compiler cache (cc-rs splits
+    # CC/CXX on whitespace, so "ccache cc" wraps the real compiler). Windows
+    # uses sccache: first-class MSVC/cl.exe support; RUSTC_WRAPPER wraps rustc.
+    # The sanitize leg sets CC/CXX inside its nix-shell instead (clang).
     env:
-      CC: "ccache cc"
-      CXX: "ccache c++"
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      RUSTC_WRAPPER: ${{ matrix.rustc-wrapper }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test (macos-latest)
+            runner: macos-latest
+            key: macos-latest
+            toolchain: stable
+            components: rustfmt, clippy
+            lint: true
+            cc: ccache cc
+            cxx: ccache c++
+          - name: test (linux-x86_64)
+            runner: ubuntu-latest
+            key: linux-x86_64
+            toolchain: stable
+            cc: ccache cc
+            cxx: ccache c++
+          - name: test (linux-arm64)
+            runner: ubuntu-24.04-arm
+            key: linux-arm64
+            toolchain: stable
+            cc: ccache cc
+            cxx: ccache c++
+          - name: test (windows-latest)
+            runner: windows-latest
+            key: windows-latest
+            toolchain: stable
+            variant: sccache
+            cc: sccache cl.exe
+            cxx: sccache cl.exe
+            rustc-wrapper: sccache
+          - name: sanitize (ASan + UBSan, nix-shell)
+            runner: ubuntu-latest
+            key: sanitize
+            sanitize: true
+          # Library-only build: rust-version applies to the published crates,
+          # not the dev-deps (criterion etc.), so --lib avoids pulling
+          # toolchain-newer dev-deps.
+          - name: msrv (1.85)
+            runner: ubuntu-latest
+            key: msrv
+            toolchain: 1.85.0
+            targets: --lib
+            cc: ccache cc
+            cxx: ccache c++
+          - name: docs (docs.rs config)
+            runner: ubuntu-latest
+            key: docs
+            toolchain: nightly
+            docs: true
+            cc: ccache cc
+            cxx: ccache c++
 
     steps:
       - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: macos-latest
-
-      # Cache Verovio's C++ objects. Swatinem/rust-cache prunes workspace-member
-      # build output, so the big C++ compile reruns every job — ccache returns
-      # the cached .o instead, keyed on compiler+flags+source (auto-invalidates
-      # on a new compiler or new Verovio submodule). verbose:2 prints hit stats.
-      - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: macos-latest
-          max-size: 600M
-          verbose: 2
-
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  test-linux:
-    name: test (linux-x86_64)
-    runs-on: ubuntu-latest
-    env:
-      CC: "ccache cc"
-      CXX: "ccache c++"
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: linux-x86_64
-
-      - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: linux-x86_64
-          max-size: 600M
-          verbose: 2
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  sanitize:
-    name: sanitize (ASan + UBSan, nix-shell)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
       - name: Install Nix
+        if: matrix.sanitize
         uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # The sanitize leg gets its Rust toolchain from shell.nix instead.
+      - name: Install Rust ${{ matrix.toolchain }}
+        if: ${{ !matrix.sanitize }}
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master 2026-08-05
         with:
-          shared-key: sanitize
+          toolchain: ${{ matrix.toolchain }}
+          components: ${{ matrix.components }}
 
-      # Persist ccache's dir across runs; the nix-shell below uses pkgs.ccache
-      # against this same CCACHE_DIR, so the ~300 instrumented C++ objects are
-      # cached run-to-run (separate key from the non-sanitized builds).
-      - name: ccache (Verovio C++ objects)
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: ${{ matrix.key }}
+
+      # Cache Verovio's C++ objects. Swatinem/rust-cache prunes workspace-member
+      # build output, so the big C++ compile reruns every leg — the compiler
+      # cache returns the cached .o instead, keyed on compiler+flags+source
+      # (auto-invalidates on a new compiler or new Verovio submodule).
+      # verbose:2 prints hit stats.
+      - name: Compiler cache (Verovio C++ objects)
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
-          key: sanitize
+          variant: ${{ matrix.variant || 'ccache' }}
+          key: ${{ matrix.key }}
           max-size: 600M
+          verbose: 2
+
+      # Put cl.exe (+ INCLUDE/LIB) on PATH. cc-rs normally activates this itself,
+      # but overriding CC/CXX to "sccache cl.exe" bypasses that, so cl.exe must
+      # already be findable for both cc-rs's family detection and sccache.
+      - name: Set up MSVC environment
+        if: matrix.variant == 'sccache'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      - name: cargo fmt --check
+        if: matrix.lint
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        if: matrix.lint
+        run: cargo clippy --workspace --all-targets
+
+      - name: cargo build
+        if: ${{ !matrix.sanitize && !matrix.docs }}
+        run: cargo build --workspace ${{ matrix.targets || '--all-targets' }} --verbose
+
+      - name: cargo test
+        if: ${{ !matrix.sanitize && !matrix.docs }}
+        run: cargo test --workspace --verbose
 
       # Sanitizer runs under Nix — plain-ubuntu apt-clang cannot link it: stable
       # rustc defaults to rust-lld (drops the -fsanitize runtime), and even
@@ -161,6 +180,7 @@ jobs:
       # bare overwrite makes binaries resolve libc against the host and crash
       # (GLIBC_PRIVATE) before any test runs; swap mold->lld, append -C linker=clang.
       - name: cargo test (sanitize)
+        if: matrix.sanitize
         env:
           # Make ASan failures fatal but readable; halt-on-error keeps the
           # first finding visible without a flood of follow-on noise.
@@ -186,163 +206,27 @@ jobs:
             ccache -s
           '
 
-  test-linux-arm64:
-    name: test (linux-arm64)
-    runs-on: ubuntu-24.04-arm
-    env:
-      CC: "ccache cc"
-      CXX: "ccache c++"
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: linux-arm64
-
-      - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: linux-arm64
-          max-size: 600M
-          verbose: 2
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-  test-windows:
-    name: test (windows-latest)
-    runs-on: windows-latest
-    # sccache caches the MSVC C++ (Verovio) + rustc. cc-rs splits CC/CXX on
-    # whitespace, so "sccache cl.exe" wraps MSVC's compiler; RUSTC_WRAPPER wraps
-    # rustc. sccache (not ccache) has first-class MSVC/cl.exe support.
-    env:
-      RUSTC_WRAPPER: sccache
-      CC: "sccache cl.exe"
-      CXX: "sccache cl.exe"
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: windows-latest
-
-      - name: sccache (caches MSVC C++ + rustc)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          variant: sccache
-          key: windows-latest
-          max-size: 600M
-
-      # Put cl.exe (+ INCLUDE/LIB) on PATH. cc-rs normally activates this itself,
-      # but overriding CC/CXX to "sccache cl.exe" bypasses that, so cl.exe must
-      # already be findable for both cc-rs's family detection and sccache.
-      - name: Set up MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
-
-      - name: cargo build
-        run: cargo build --workspace --all-targets --verbose
-
-      - name: cargo test
-        run: cargo test --workspace --verbose
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats
-
-  msrv:
-    name: msrv (1.85)
-    runs-on: ubuntu-latest
-    env:
-      CC: "ccache cc"
-      CXX: "ccache c++"
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust 1.85 (declared MSRV)
-        uses: dtolnay/rust-toolchain@1.85.0
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: msrv
-
-      - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: msrv
-          max-size: 600M
-
-      # Library-only build: rust-version applies to the published crates, not the
-      # dev-deps (criterion etc.), so --lib avoids pulling toolchain-newer dev-deps.
-      - name: cargo build (libs only)
-        run: cargo build --workspace --lib --verbose
-
-  docs:
-    name: docs (docs.rs config)
-    runs-on: ubuntu-latest
-    env:
-      CC: "ccache cc"
-      CXX: "ccache c++"
-
-    steps:
-      - name: Checkout (with Verovio submodule)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          submodules: recursive
-
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-
-      - name: Cache cargo / target
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: docs
-
-      - name: ccache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-        with:
-          key: docs
-          max-size: 600M
-
       # Mirror [package.metadata.docs.rs]: nightly + --cfg docsrs + the documented
       # feature set. -D warnings turns broken intra-doc links into a failure here,
       # before they ship to docs.rs.
       - name: cargo doc (docs.rs settings)
+        if: matrix.docs
         env:
           RUSTDOCFLAGS: "--cfg docsrs -D warnings"
         run: cargo doc --no-deps -p verovio --features png,pdf,audio
 
-  # Single required status check for branch protection: aggregates every job so
-  # the protected-branch rule needs one stable context (rename-proof) instead of
-  # five matrix names. Fails if any needed job failed or was cancelled; passes if
-  # all succeeded or were skipped (docs-only paths-ignore run).
+      - name: sccache stats
+        if: always() && matrix.variant == 'sccache'
+        run: sccache --show-stats
+
+  # Single required status check for branch protection: aggregates the matrix
+  # so the protected-branch rule needs one stable context (rename-proof)
+  # instead of one name per leg. Fails if any leg failed or was cancelled;
+  # passes if all succeeded or were skipped (docs-only paths-ignore run).
   ci-success:
     name: CI Success
     if: always()
-    needs: [test-macos, test-linux, sanitize, test-linux-arm64, test-windows, msrv, docs]
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs passed
