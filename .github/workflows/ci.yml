@@ -92,12 +92,19 @@ jobs:
             sanitize: true
           # Library-only build: rust-version applies to the published crates,
           # not the dev-deps (criterion etc.), so --lib avoids pulling
-          # toolchain-newer dev-deps.
+          # toolchain-newer dev-deps. Build-only leg, as before the matrix
+          # refactor: cargo test would compile those dev-deps on 1.85.
+          # resolver-fallback: this repo tracks no Cargo.lock, so the leg
+          # resolves fresh; fallback prefers dependency versions compatible
+          # with the declared rust-version instead of failing on crates that
+          # later raised their MSRV (cxx 1.0.199 requires rustc 1.88).
           - name: msrv (1.85)
             runner: ubuntu-latest
             key: msrv
             toolchain: 1.85.0
             targets: --lib
+            notest: true
+            resolver-fallback: true
             cc: ccache cc
             cxx: ccache c++
           - name: docs (docs.rs config)
@@ -163,10 +170,14 @@ jobs:
 
       - name: cargo build
         if: ${{ !matrix.sanitize && !matrix.docs }}
+        env:
+          # fallback only on the msrv leg (see the matrix entry); 'allow' is
+          # cargo's default resolution behavior on every other leg.
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: ${{ matrix.resolver-fallback && 'fallback' || 'allow' }}
         run: cargo build --workspace ${{ matrix.targets || '--all-targets' }} --verbose
 
       - name: cargo test
-        if: ${{ !matrix.sanitize && !matrix.docs }}
+        if: ${{ !matrix.sanitize && !matrix.docs && !matrix.notest }}
         run: cargo test --workspace --verbose
 
       # Sanitizer runs under Nix — plain-ubuntu apt-clang cannot link it: stable
