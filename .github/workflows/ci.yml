@@ -123,7 +123,7 @@ jobs:
 
       - name: Install Nix
         if: matrix.sanitize
-        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
@@ -146,7 +146,7 @@ jobs:
       # (auto-invalidates on a new compiler or new Verovio submodule).
       # verbose:2 prints hit stats.
       - name: Compiler cache (Verovio C++ objects)
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           variant: ${{ matrix.variant || 'ccache' }}
           key: ${{ matrix.key }}
